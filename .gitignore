@@ -1,0 +1,21 @@
+# Environment / secrets
+.env
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+
+# Local application data
+app/data/uploads/*
+app/data/audio_in/*
+app/data/audio_out/*
+app/data/vectorstore/*
+
+# OS
+.DS_Store
+Thumbs.db
