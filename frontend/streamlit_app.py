@@ -580,7 +580,11 @@ with tab_chat:
     # -------------------------------------------------------------
     # ChatGPT-Style Floating Bottom Docked Searchbar
     # -------------------------------------------------------------
-    with st._bottom:
+    bottom_container = getattr(st, "bottom", getattr(st, "_bottom", None))
+    if bottom_container:
+        with bottom_container:
+            chat_val = chat_bar_component(key="unified_chat_bar")
+    else:
         chat_val = chat_bar_component(key="unified_chat_bar")
 
     if chat_val and chat_val.get("msg_id") != st.session_state.get("last_chat_bar_msg_id"):
