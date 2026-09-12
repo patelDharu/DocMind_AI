@@ -1,0 +1,6 @@
+EmpID,Name,Role,Department,Location,Salary_INR,Rating,Salary_USD,Salary_EUR
+E-101,Aarav Sharma,Principal AI Architect,Engineering,"Bengaluru, India",4200000.0,4.9,,
+E-102,Sophia Chen,VP of Product,Product,"San Francisco, USA",,4.8,210000.0,
+E-103,Marcus Becker,Director of Cloud Security,Information Security,"Berlin, Germany",,4.7,,145000.0
+E-104,Priya Patel,Lead Data Scientist,Engineering,"Mumbai, India",3400000.0,4.9,,
+E-105,David Miller,Head of Enterprise Sales,Sales & Growth,"New York, USA",,4.6,185000.0,

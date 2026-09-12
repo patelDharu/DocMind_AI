@@ -1,65 +1,60 @@
-from functools import lru_cache
-from faster_whisper import WhisperModel
+# app/core/speech.py
+
+import os
+import json
+from google import genai
+from google.genai import types
+from app.core.resilience import retry_gemini, generate_with_cascade
+
+def get_genai_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is not set.")
+    return genai.Client(api_key=api_key.strip("'\""))
+
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 
-@lru_cache(maxsize=1)
-def get_whisper_model():
+@retry_gemini(max_retries=3, initial_delay=1.0)
+def transcribe_audio(audio_path: str) -> dict:
     """
-    Load Whisper model once and reuse it.
-    CPU + int8 keeps memory usage lower.
+    Transcribes spoken questions in English, Hindi, or Gujarati using Gemini.
+    Detects the spoken language automatically.
     """
+    client = get_genai_client()
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
 
-    return WhisperModel(
-        "base",
-        device="cpu",
-        compute_type="int8"
+    prompt = (
+        "Accurately transcribe the spoken speech in this audio. "
+        "The language may be English, Hindi, or Gujarati. "
+        "Return ONLY a valid JSON object matching this schema:\n"
+        '{"text": "<exact transcript>", "language": "<en|hi|gu>"}'
     )
 
+    contents = [
+        types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav"),
+        prompt,
+    ]
 
-def transcribe_audio(
-    audio_path: str,
-    language: str | None = None
-) -> dict:
-    """
-    Transcribe an audio file using faster-whisper.
-
-    Returns:
-        {
-            "text": "...",
-            "language": "en",
-            "segments": [...]
-        }
-    """
-
-    model = get_whisper_model()
-
-    segments, info = model.transcribe(
-        audio_path,
-        language=language,
-        beam_size=5,
-        vad_filter=True
-    )
-
-    segment_list = []
-
-    for segment in segments:
-        segment_list.append({
-            "start": round(segment.start, 2),
-            "end": round(segment.end, 2),
-            "text": segment.text.strip()
-        })
-
-    text = " ".join(
-        segment["text"]
-        for segment in segment_list
-    ).strip()
-
-    return {
-        "text": text,
-        "language": info.language,
-        "language_probability": round(
-            info.language_probability,
-            4
+    response_text = generate_with_cascade(
+        client=client,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
         ),
-        "segments": segment_list
-    }
+        model_override=MODEL_NAME,
+    )
+
+    try:
+        data = json.loads(response_text)
+        return {
+            "text": data.get("text", "").strip(),
+            "language": data.get("language", "en"),
+        }
+    except Exception:
+        return {
+            "text": response_text.strip() if response_text else "",
+            "language": "en",
+        }

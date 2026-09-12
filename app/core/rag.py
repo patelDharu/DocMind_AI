@@ -1,354 +1,239 @@
 # app/core/rag.py
 
 import os
-
+from typing import List, Dict, Any
 from google import genai
 from google.genai import types
 
 from app.core.vectorstore import VectorStore
+from app.core.query_rewriter import QueryRewriter
+from app.core.resilience import retry_gemini, GeminiServiceError, generate_with_cascade
 
+
+def get_genai_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise GeminiServiceError(
+            "GEMINI_API_KEY is not set. Please add GEMINI_API_KEY to your .env file.",
+            status_code=400,
+        )
+    return genai.Client(api_key=api_key.strip("'\""))
+
+
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 # =========================================================
-# Gemini Configuration
-# =========================================================
-
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
-
-MODEL_NAME = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-3.6-flash"
-)
-
-
-# =========================================================
-# System Prompt
+# CHATGPT-STYLE MASTER MODEL SYSTEM PROMPT
 # =========================================================
 
 SYSTEM_PROMPT = """
-You are DocMind AI, a trilingual document question-answering assistant.
+You are DocMind Master AI, an advanced document intelligence assistant delivering authoritative, highly accurate, and beautifully structured responses.
 
-LANGUAGE RULE:
-Always respond in the SAME language as the user's question.
+CORE OPERATIONAL PRINCIPLES:
+1. Deliver answers with executive polish, structured formatting, and zero fluff.
+2. Structure your answers with clear visual hierarchy:
+   - 📌 **Direct Summary**: Start with a crisp, direct answer (1-2 sentences).
+   - 🔍 **Detailed Breakdown**: Use bold bullet points to explain details, deadlines, monetary amounts, and terms.
+   - 📊 **Tabular Comparison/Data**: If the query involves numbers, metrics, or comparisons, format them in a clean Markdown table.
+   - 📖 **Exact Citations**: Always mention the source document name and page number at the end.
 
-- English question → answer in English.
-- Hindi question → answer fully in Hindi using Devanagari script.
-- Gujarati question → answer fully in Gujarati script.
+STRICT GROUNDING (ZERO-HALLUCINATION POLICY):
+1. Rely EXCLUSIVELY on facts explicitly stated in the DOCUMENT CONTEXT below.
+2. NEVER use prior knowledge, outside speculation, or unverified assumptions.
+3. If the question asks about information NOT present in the context, you MUST reply with the exact not-found phrase:
+   - English: "I couldn't find relevant information in the selected document(s) to answer that."
+   - Hindi: "मुझे चयनित दस्तावेज़(ज़ों) में इस प्रश्न का उत्तर देने के लिए कोई प्रासंगिक जानकारी नहीं मिली।"
+   - Gujarati: "મને પસંદ કરેલા દસ્તાવેજ(જો)માં આ પ્રશ્નનો જવાબ આપવા માટે કોઈ સંબંધિત માહિતી મળી નથી."
 
-If the source document is written in another language,
-translate the relevant information into the user's question language.
+TRILINGUAL MASTERY:
+- English question -> English response.
+- Hindi question -> Pure, professional Hindi in Devanagari script.
+- Gujarati question -> Pure, professional Gujarati in Gujarati script.
 
-CONTENT RULE:
-Answer ONLY using the provided context.
-
-You may:
-- summarize information
-- combine information from multiple chunks
-- reason over information contained in the context
-
-You must NOT:
-- invent facts
-- use outside knowledge
-- assume information that is not present in the context
-
-If the answer is not available in the provided context,
-clearly say that you could not find the answer.
-
-SOURCE RULE:
-At the end of the answer, mention the relevant source
-filename and page number when available.
+CONVERSATION CONTEXT:
+The conversation history is provided ONLY to resolve follow-up pronouns (e.g., 'it', 'the second one', 'tell me more'). Every fact in your answer must be verified against the DOCUMENT CONTEXT.
 """
 
-
-# =========================================================
-# Not Found Messages
-# =========================================================
-
 NOT_FOUND_MESSAGES = {
-    "en": (
-        "I couldn't find relevant information in the "
-        "selected document to answer that."
-    ),
-
-    "hi": (
-        "मुझे चयनित दस्तावेज़ में इस प्रश्न का उत्तर देने "
-        "के लिए प्रासंगिक जानकारी नहीं मिली।"
-    ),
-
-    "gu": (
-        "મને પસંદ કરેલા દસ્તાવેજમાં આ પ્રશ્નનો જવાબ આપવા "
-        "માટે સંબંધિત માહિતી મળી નથી."
-    ),
+    "en": "I couldn't find relevant information in the selected document(s) to answer that.",
+    "hi": "मुझे चयनित दस्तावेज़(ज़ों) में इस प्रश्न का उत्तर देने के लिए कोई प्रासंगिक जानकारी नहीं मिली।",
+    "gu": "મને પસંદ કરેલા દસ્તાવેજ(જો)માં આ પ્રશ્નનો જવાબ આપવા માટે કોઈ સંબંધિત માહિતી મળી નથી.",
 }
 
 
-# =========================================================
-# RAG Pipeline
-# =========================================================
-
 class RAGPipeline:
-
     def __init__(self):
         self.store = VectorStore()
+        self.rewriter = QueryRewriter()
+        self.model = MODEL_NAME
 
-    # -----------------------------------------------------
-    # Ingest
-    # -----------------------------------------------------
-
-    def ingest(self, chunks: list[dict]):
-        """
-        Add document chunks to the vector store.
-        """
-
+    def ingest(self, chunks: List[Dict[str, Any]]):
         self.store.add_chunks(chunks)
 
-    # -----------------------------------------------------
-    # Confidence
-    # -----------------------------------------------------
-
-    def _confidence_label(
-        self,
-        top_score: float
-    ) -> str:
-
-        if top_score >= 0.50:
+    def _confidence_label(self, top_score: float) -> str:
+        if top_score >= 0.55:
             return "high"
-
-        elif top_score >= 0.30:
+        elif top_score >= 0.35:
             return "medium"
-
         return "low"
 
-    # -----------------------------------------------------
-    # Answer
-    # -----------------------------------------------------
+    def _detect_query_lang(self, text: str, hint: str | None = None) -> str:
+        if hint in NOT_FOUND_MESSAGES:
+            return hint
+        if any('\u0A80' <= ch <= '\u0AFF' for ch in text):
+            return "gu"
+        if any('\u0900' <= ch <= '\u097F' for ch in text):
+            return "hi"
+        return "en"
+
+    @retry_gemini(max_retries=4, initial_delay=2.0)
+    def _generate_answer(self, prompt: str) -> str:
+        client = get_genai_client()
+        return generate_with_cascade(
+            client=client,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=2000,
+                temperature=0.1,
+            ),
+            model_override=self.model,
+        )
 
     def answer(
         self,
         question: str,
         top_k: int = 8,
         lang_hint: str | None = None,
-        document_id: str | None = None,
-    ) -> dict:
-        """
-        Answer a question using retrieved document context.
-
-        document_id:
-            If provided → search only that document.
-
-            If None → search across all indexed documents.
-        """
-
-        question = question.strip()
-
-        if not question:
+        document_ids: List[str] | str | None = None,
+        history: List[Dict[str, str]] | None = None,
+    ) -> Dict[str, Any]:
+        raw_question = question.strip()
+        if not raw_question:
             return {
-                "answer": "Please enter a question.",
+                "answer": "Please enter a valid question.",
                 "sources": [],
                 "confidence": "low",
+                "rewritten_query": "",
             }
 
-        # =================================================
-        # RETRIEVAL
-        # =================================================
+        detected_lang = self._detect_query_lang(raw_question, lang_hint)
 
-        retrieved = self.store.search(
-            query=question,
+        # 1. QUERY REWRITING
+        search_query = raw_question
+        if history and len(history) > 0:
+            search_query = self.rewriter.rewrite_query(raw_question, history)
+
+        # 2. HYBRID SEARCH
+        target_ids = None
+        if isinstance(document_ids, str) and document_ids.strip():
+            target_ids = [document_ids.strip()]
+        elif isinstance(document_ids, list):
+            target_ids = [str(d).strip() for d in document_ids if str(d).strip()]
+
+        retrieved_chunks = self.store.search(
+            query=search_query,
             top_k=top_k,
-            document_id=document_id,
+            document_ids=target_ids,
+            min_relevance_threshold=0.10,
         )
 
-        # =================================================
-        # RELEVANCE FILTER
-        # =================================================
-
-        relevant = [
-            result
-            for result in retrieved
-            if result.get("score", 0) > 0.25
-        ]
-
-        # =================================================
-        # NO RELEVANT INFORMATION
-        # =================================================
-
-        if not relevant:
-
-            fallback_language = (
-                lang_hint
-                if lang_hint in NOT_FOUND_MESSAGES
-                else "en"
-            )
-
+        # 3. HALLUCINATION PROTECTION: Strict threshold check
+        top_score = retrieved_chunks[0].get("score", 0.0) if retrieved_chunks else 0.0
+        if not retrieved_chunks or top_score < 0.28:
             return {
-                "answer": NOT_FOUND_MESSAGES[
-                    fallback_language
-                ],
+                "answer": NOT_FOUND_MESSAGES.get(detected_lang, NOT_FOUND_MESSAGES["en"]),
                 "sources": [],
                 "confidence": "low",
+                "rewritten_query": search_query if search_query != raw_question else None,
             }
 
-        # =================================================
-        # BUILD CONTEXT
-        # =================================================
-
+        # 4. CONTEXT ASSEMBLY
         context_parts = []
-
-        for result in relevant:
-
-            source = result.get(
-                "source",
-                "unknown"
-            )
-
-            page = result.get(
-                "page",
-                1
-            )
-
-            text = result.get(
-                "text",
-                ""
-            )
-
+        for c in retrieved_chunks:
+            source = c.get("source", "unknown")
+            page = c.get("page", 1)
+            text = c.get("text", "")
             context_parts.append(
-                f"""
-[Source: {source}, Page: {page}]
-{text}
-""".strip()
+                f"[DOCUMENT: {source} | PAGE: {page}]\n{text}"
             )
 
-        context_block = "\n\n".join(
-            context_parts
-        )
+        context_block = "\n\n---\n\n".join(context_parts)
 
-        # =================================================
-        # GEMINI PROMPT
-        # =================================================
+        # History context for pronoun resolution
+        history_str = ""
+        if history and len(history) > 0:
+            turns = []
+            for h in history[-4:]:
+                role = "User" if h.get("role") == "user" else "Assistant"
+                turns.append(f"{role}: {h.get('content', '')}")
+            history_str = "CONVERSATION HISTORY (Reference for follow-ups only):\n" + "\n".join(turns) + "\n\n"
 
-        user_prompt = f"""
-CONTEXT:
-
+        # 5. MASTER PROMPT COMPOSITION
+        prompt = f"""
+DOCUMENT CONTEXT:
 {context_block}
 
 --------------------------------------------------
-
-USER QUESTION:
-
-{question}
+{history_str}CURRENT USER QUESTION:
+{raw_question}
 
 --------------------------------------------------
-
-IMPORTANT:
-
-Answer the user's question using ONLY the context above.
-
-Use the same language as the user's question.
-
-If the context does not contain the answer,
-say that the information was not found.
-
-Do not use outside knowledge.
+ANSWER INSTRUCTIONS:
+1. Verify if the DOCUMENT CONTEXT contains the answer to the CURRENT USER QUESTION.
+2. If YES:
+   - Provide a direct answer in 1-2 sentences.
+   - Follow with structured bullet points detailing key evidence, numbers, and dates.
+   - If tabular data exists, summarize it in a clean Markdown table.
+   - At the bottom, cite: **Sources: [Filename], Page [Page]**
+3. If NO: Output strictly: "{NOT_FOUND_MESSAGES.get(detected_lang, NOT_FOUND_MESSAGES['en'])}"
+4. Respond in {detected_lang}.
 """
 
-        # =================================================
-        # GEMINI GENERATION
-        # =================================================
-
+        # 6. RESILIENT GENERATION
         try:
-
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    max_output_tokens=1200,
-                ),
-            )
-
-            answer_text = (
-                response.text
-                if response.text
-                else "No answer was generated."
-            )
-
-        except Exception as e:
-
+            answer_text = self._generate_answer(prompt)
+        except GeminiServiceError as ge:
             return {
-                "answer": (
-                    "An error occurred while generating "
-                    f"the answer: {str(e)}"
-                ),
+                "answer": f"Service Notice: {str(ge)}",
                 "sources": [],
                 "confidence": "low",
+                "rewritten_query": search_query,
+            }
+        except Exception as e:
+            return {
+                "answer": f"An unexpected error occurred: {str(e)}",
+                "sources": [],
+                "confidence": "low",
+                "rewritten_query": search_query,
             }
 
-        # =================================================
-        # SOURCES
-        # =================================================
-
+        # 7. CITATIONS FORMATTING
         sources = []
+        seen_keys = set()
+        for chunk in retrieved_chunks:
+            source_file = chunk.get("source", "unknown")
+            page_num = chunk.get("page", 1)
+            key = (source_file, page_num)
 
-        seen_sources = set()
-
-        for result in relevant:
-
-            source = result.get(
-                "source",
-                "unknown"
-            )
-
-            page = result.get(
-                "page",
-                1
-            )
-
-            source_key = (
-                source,
-                page
-            )
-
-            if source_key in seen_sources:
+            if key in seen_keys:
                 continue
+            seen_keys.add(key)
 
-            seen_sources.add(
-                source_key
-            )
+            snippet_text = chunk.get("text", "").replace("\n", " ").strip()
+            preview = snippet_text[:140] + "..." if len(snippet_text) > 140 else snippet_text
 
-            sources.append(
-                {
-                    "source": source,
-                    "page": page,
-                    "score": round(
-                        result.get(
-                            "score",
-                            0
-                        ),
-                        3
-                    ),
-                }
-            )
-
-        # =================================================
-        # CONFIDENCE
-        # =================================================
-
-        top_score = relevant[0].get(
-            "score",
-            0
-        )
-
-        confidence = self._confidence_label(
-            top_score
-        )
-
-        # =================================================
-        # FINAL RESULT
-        # =================================================
+            sources.append({
+                "source": source_file,
+                "page": page_num,
+                "score": round(chunk.get("score", 0.0), 3),
+                "snippet": preview,
+            })
 
         return {
-            "answer": answer_text.strip(),
+            "answer": answer_text,
             "sources": sources,
-            "confidence": confidence,
+            "confidence": self._confidence_label(top_score),
+            "rewritten_query": search_query if search_query != raw_question else None,
+            "detected_language": detected_lang,
         }

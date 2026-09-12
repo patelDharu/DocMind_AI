@@ -1,548 +1,1141 @@
 # frontend/streamlit_app.py
 
+import base64
+import json
+import os
+import uuid
+from datetime import datetime
+from pathlib import Path
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 
-from audio_recorder_streamlit import audio_recorder
-
-
-API_URL = "http://localhost:8000"
-
-
-# =========================================================
-# PAGE CONFIG
-# =========================================================
+API_URL = "http://127.0.0.1:8000"
+CHAT_SESSIONS_FILE = Path("app/data/chat_sessions.json")
+chat_bar_component = components.declare_component("chat_bar", path="frontend/components/chat_bar")
 
 st.set_page_config(
-    page_title="DocMind AI",
+    page_title="DocMind AI — Document Intelligence & Studio",
     page_icon="📄",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("📄 DocMind AI — Trilingual Document Intelligence")
+st.markdown("""
+<style>
+    .source-card {
+        background-color: #f8f9fa;
+        border-left: 4px solid #4f46e5;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+        border-radius: 4px;
+    }
+    .badge-high { color: #15803d; font-weight: 600; }
+    .badge-med { color: #b45309; font-weight: 600; }
+    .badge-low { color: #b91c1c; font-weight: 600; }
+    .chat-listen-btn { margin-top: 6px; }
 
-st.caption(
-    "Ask questions from your documents in English, Hindi, "
-    "or Gujarati — by typing or speaking."
-)
+    /* ChatGPT style session items */
+    .chat-session-btn {
+        text-align: left !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    /* Full-screen natural conversation flow (matching Image 3 ChatGPT) */
+    div[data-testid="stChatMessage"] {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        margin-bottom: 0.75rem !important;
+    }
+
+    /* Fixed floating bottom search bar container */
+    div[data-testid="stBottom"] {
+        display: none !important;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.92) 30%, #ffffff 100%) !important;
+        padding-top: 16px !important;
+        padding-bottom: 8px !important;
+        z-index: 9999 !important;
+    }
+
+    /* Show stBottom only when Tab 1 (Chat & Q&A) is the active tab */
+    body:has(.stTabs [data-baseweb="tab-list"] > button:first-child[aria-selected="true"]) div[data-testid="stBottom"],
+    body:has(.stTabs [data-baseweb="tab-list"] > [role="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
+    body:has(.stTabs button[data-baseweb="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
+    .stApp:has(.stTabs [data-baseweb="tab-list"] > button:first-child[aria-selected="true"]) div[data-testid="stBottom"],
+    .stApp:has(.stTabs [data-baseweb="tab-list"] > [role="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
+    .stApp:has(.stTabs button[data-baseweb="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"] {
+        display: block !important;
+    }
+
+    div[data-testid="stBottomBlockContainer"] {
+        max-width: 95% !important;
+        width: 95% !important;
+        margin: 0 auto !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    /* Full-width spacious layout covering extra side space nicely without clipping */
+    .block-container {
+        padding-top: 4.5rem !important;
+        padding-bottom: 7.5rem !important;
+        max-width: 95% !important;
+        width: 95% !important;
+        margin: 0 auto !important;
+    }
+
+    /* Clean styling for main navigation tabs without side clipping */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        padding-top: 4px;
+        padding-bottom: 6px;
+        overflow-x: auto;
+        white-space: nowrap;
+        flex-wrap: nowrap;
+    }
+    .stTabs [data-baseweb="tab"] {
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: 6px;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 # =========================================================
-# CONSTANTS
+# CHAT SESSIONS & HISTORY PERSISTENCE (ChatGPT-STYLE)
 # =========================================================
 
-CONFIDENCE_BADGE = {
-    "high": "🟢 High confidence",
-    "medium": "🟡 Medium confidence",
-    "low": "🔴 Low confidence",
-}
-
-LANG_CODE = {
-    "Auto-detect": None,
-    "English": "en",
-    "Hindi (हिन्दी)": "hi",
-    "Gujarati (ગુજરાતી)": "gu",
-}
-
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-if "current_document_id" not in st.session_state:
-    st.session_state.current_document_id = None
-
-if "current_document_name" not in st.session_state:
-    st.session_state.current_document_name = None
-
-if "documents" not in st.session_state:
-    st.session_state.documents = {}
-
-
-# =========================================================
-# HELPER: GET DOCUMENTS
-# =========================================================
-
-def get_documents():
-    """
-    Get indexed documents from backend.
-
-    The current backend can reconstruct document information
-    from ChromaDB metadata.
-    """
-
+def load_chat_sessions():
+    """Load all saved chat sessions from disk, sorted newest first."""
+    if not CHAT_SESSIONS_FILE.exists():
+        return []
     try:
-        response = requests.get(
-            f"{API_URL}/documents",
-            timeout=10,
-        )
-
-        if response.ok:
-            data = response.json()
-
-            return data.get(
-                "documents",
-                [],
-            )
-
-    except requests.RequestException:
+        with open(CHAT_SESSIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
         pass
-
     return []
 
 
-# =========================================================
-# HELPER: RENDER RESULT
-# =========================================================
-
-def render_result(result: dict):
-
-    st.markdown("### Answer")
-
-    st.write(
-        result.get(
-            "answer",
-            "No answer returned.",
-        )
-    )
-
-    confidence = result.get(
-        "confidence",
-        "medium",
-    )
-
-    st.caption(
-        CONFIDENCE_BADGE.get(
-            confidence,
-            "",
-        )
-    )
-
-    # -----------------------------------------------------
-    # Sources
-    # -----------------------------------------------------
-
-    sources = result.get(
-        "sources",
-        [],
-    )
-
-    if sources:
-
-        st.markdown("### Sources")
-
-        for source in sources:
-
-            st.write(
-                f"- **{source['source']}**, "
-                f"page {source['page']} "
-                f"(relevance: {source['score']})"
-            )
+def save_chat_sessions(sessions):
+    """Save chat sessions list to disk."""
+    try:
+        CHAT_SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(CHAT_SESSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sessions, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving chat sessions: {e}")
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
+def save_current_chat_session():
+    """Persist current active session to disk if it has messages."""
+    if not st.session_state.get("messages"):
+        return
 
-st.sidebar.header("📚 Documents")
+    sessions = load_chat_sessions()
+    sess_id = st.session_state.get("current_session_id")
+    if not sess_id:
+        sess_id = str(uuid.uuid4())[:8]
+        st.session_state.current_session_id = sess_id
+
+    # Derive title from first user message
+    first_q = next((m["content"] for m in st.session_state.messages if m["role"] == "user"), "New Conversation")
+    clean_title = first_q.replace("🎤 ", "").strip()
+    if len(clean_title) > 30:
+        clean_title = clean_title[:30] + "..."
+
+    now_str = datetime.now().strftime("%d %b, %H:%M")
+
+    existing_idx = next((i for i, s in enumerate(sessions) if s.get("id") == sess_id), None)
+    session_data = {
+        "id": sess_id,
+        "title": clean_title,
+        "updated_at": now_str,
+        "selected_document_ids": st.session_state.get("selected_document_ids", []),
+        "active_doc_id": st.session_state.get("active_doc_id"),
+        "messages": st.session_state.get("messages", []),
+    }
+
+    if existing_idx is not None:
+        orig_title = sessions[existing_idx].get("title")
+        if orig_title and orig_title != "New Conversation":
+            session_data["title"] = orig_title
+        sessions[existing_idx] = session_data
+        # Keep most recently updated session at top
+        sessions.insert(0, sessions.pop(existing_idx))
+    else:
+        sessions.insert(0, session_data)
+
+    sessions = sessions[:30]
+    save_chat_sessions(sessions)
 
 
-# =========================================================
-# UPLOAD DOCUMENT
-# =========================================================
-
-uploaded_file = st.sidebar.file_uploader(
-    "Choose a PDF, DOCX, TXT, or MD file",
-    type=[
-        "pdf",
-        "docx",
-        "txt",
-        "md",
-    ],
-)
+def start_new_chat():
+    """Save current chat and initialize a clean new chat."""
+    save_current_chat_session()
+    st.session_state.current_session_id = str(uuid.uuid4())[:8]
+    st.session_state.messages = []
+    st.session_state.audio_cache = {}
 
 
-if uploaded_file:
+def switch_to_chat_session(session_id: str):
+    """Switch to an existing chat session from history."""
+    save_current_chat_session()
+    sessions = load_chat_sessions()
+    target = next((s for s in sessions if s.get("id") == session_id), None)
+    if target:
+        st.session_state.current_session_id = target["id"]
+        st.session_state.messages = target.get("messages", [])
+        st.session_state.selected_document_ids = target.get("selected_document_ids", [])
+        st.session_state.active_doc_id = target.get("active_doc_id")
+        st.session_state.audio_cache = {}
 
-    if st.sidebar.button(
-        "📥 Index document",
-        use_container_width=True,
-    ):
 
-        with st.spinner(
-            "Chunking, embedding, and indexing..."
-        ):
-
-            try:
-
-                files = {
-                    "file": (
-                        uploaded_file.name,
-                        uploaded_file.getvalue(),
-                    )
-                }
-
-                response = requests.post(
-                    f"{API_URL}/upload",
-                    files=files,
-                    timeout=300,
-                )
-
-                if response.ok:
-
-                    data = response.json()
-
-                    document_id = data[
-                        "document_id"
-                    ]
-
-                    filename = data[
-                        "filename"
-                    ]
-
-                    # -----------------------------------------
-                    # Make newly uploaded document current
-                    # -----------------------------------------
-
-                    st.session_state.current_document_id = (
-                        document_id
-                    )
-
-                    st.session_state.current_document_name = (
-                        filename
-                    )
-
-                    st.sidebar.success(
-                        f"Indexed {data['chunks_indexed']} "
-                        f"chunks from {filename}"
-                    )
-
-                    st.sidebar.info(
-                        "This document is now selected."
-                    )
-
-                else:
-
-                    st.sidebar.error(
-                        response.text
-                    )
-
-            except requests.RequestException as e:
-
-                st.sidebar.error(
-                    f"Backend connection error: {e}"
-                )
+def delete_chat_session(session_id: str):
+    """Delete a chat session from history."""
+    sessions = load_chat_sessions()
+    sessions = [s for s in sessions if s.get("id") != session_id]
+    save_chat_sessions(sessions)
+    if st.session_state.get("current_session_id") == session_id:
+        start_new_chat()
 
 
 # =========================================================
-# DOCUMENT SELECTION
+# SESSION STATE INITIALIZATION
 # =========================================================
+
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = str(uuid.uuid4())[:8]
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "selected_document_ids" not in st.session_state:
+    st.session_state.selected_document_ids = []
+
+if "active_doc_id" not in st.session_state:
+    st.session_state.active_doc_id = None
+
+if "audio_cache" not in st.session_state:
+    st.session_state.audio_cache = {}
+
+if "doc_action_alerts" not in st.session_state:
+    st.session_state.doc_action_alerts = {}
+
+
+# =========================================================
+# API HELPER FUNCTIONS
+# =========================================================
+
+def fetch_documents():
+    try:
+        res = requests.get(f"{API_URL}/documents", timeout=10)
+        if res.ok:
+            return res.json().get("documents", [])
+    except Exception:
+        pass
+    return []
+
+
+def delete_document(doc_id: str):
+    try:
+        res = requests.delete(f"{API_URL}/documents/{doc_id}", timeout=15)
+        return res.ok
+    except Exception:
+        return False
+
+
+def synthesize_audio_api(text: str, lang: str = "en"):
+    try:
+        res = requests.post(f"{API_URL}/speak", params={"text": text, "language": lang}, timeout=30)
+        if res.ok:
+            data = res.json()
+            return f"{API_URL}/audio/{data['filename']}"
+    except Exception:
+        pass
+    return None
+
+
+def format_action_alert_markdown(alert: dict) -> str:
+    """Formats proactive action & deadline alert into a beautiful markdown callout card."""
+    if not alert:
+        return ""
+
+    requires_action = alert.get("requires_action", False)
+    urgency = (alert.get("urgency") or "none").lower()
+    doc_type = alert.get("document_type") or "Document"
+    deadline = alert.get("deadline")
+    summary = alert.get("action_summary", "")
+    items = alert.get("action_items", [])
+    consequences = alert.get("consequences")
+
+    if requires_action:
+        urgency_labels = {
+            "high": "🔴 **HIGH URGENCY — ACTION REQUIRED**",
+            "medium": "🟡 **MEDIUM URGENCY — ACTION REQUIRED**",
+            "low": "🔵 **LOW URGENCY — ACTION RECOMMENDED**",
+        }
+        badge = urgency_labels.get(urgency, "⚠️ **ACTION REQUIRED**")
+
+        lines = [
+            f"> ### ⚠️ Proactive Alert: Action Required",
+            f"> {badge} &nbsp;|&nbsp; 📋 *Classification: {doc_type}*",
+            f"> ",
+            f"> 🎯 **Action Summary**: {summary}",
+        ]
+        if deadline and str(deadline).lower() not in ["null", "none", ""]:
+            lines.append(f"> 📅 **Deadline / Due Date**: **{deadline}**")
+        if items and isinstance(items, list):
+            lines.append(f"> 📋 **What You Need To Do**:\n" + "\n".join([f">   - {it}" for it in items if it]))
+        if consequences and str(consequences).lower() not in ["null", "none", ""]:
+            lines.append(f"> ⚠️ **Consequences If Missed**: {consequences}")
+
+        return "\n".join(lines)
+    else:
+        lines = [
+            f"> ### ✅ Proactive Alert: No Action Needed",
+            f"> 🟢 **INFORMATIONAL DOCUMENT** &nbsp;|&nbsp; 📋 *Classification: {doc_type}*",
+            f"> ",
+            f"> ℹ️ **Status**: {summary}",
+            f"> *This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*",
+        ]
+        return "\n".join(lines)
+
+
+def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str | None:
+    """Uploads file to backend if not already uploaded, returning document_id with caching."""
+    if not uploaded_file:
+        return None
+    cache = st.session_state.setdefault("uploader_cache", {})
+    file_bytes = uploaded_file.getvalue()
+    file_sig = f"{uploaded_file.name}_{len(file_bytes)}"
+    if cache_prefix in cache and cache[cache_prefix].get("sig") == file_sig:
+        return cache[cache_prefix].get("doc_id")
+
+    try:
+        files = {"file": (uploaded_file.name, file_bytes)}
+        res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
+        if res.ok:
+            data = res.json()
+            doc_id = data["document_id"]
+            if data.get("action_alert"):
+                st.session_state.setdefault("doc_action_alerts", {})[doc_id] = data["action_alert"]
+            cache[cache_prefix] = {"sig": file_sig, "doc_id": doc_id}
+            return doc_id
+        else:
+            st.error(f"Upload failed for {uploaded_file.name}: {res.text}")
+            return None
+    except Exception as e:
+        st.error(f"Error uploading {uploaded_file.name}: {e}")
+        return None
+
+
+# =========================================================
+# SIDEBAR: DOCUMENT REPOSITORY & SELECTION
+# =========================================================
+
+st.sidebar.title("📚 DocMind AI")
+st.sidebar.caption("Trilingual RAG & Document Studio")
+
+# ---------------------------------------------------------
+# ChatGPT-Style: Primary ➕ New Chat Action
+# ---------------------------------------------------------
+if st.sidebar.button("➕ New Chat", key="top_new_chat_btn", use_container_width=True, type="primary"):
+    start_new_chat()
+    st.rerun()
+
+# ---------------------------------------------------------
+# ChatGPT-Style: Recent Chats / Conversation History
+# ---------------------------------------------------------
+saved_sessions = load_chat_sessions()
+if saved_sessions:
+    with st.sidebar.expander(f"💬 Recent Chats ({len(saved_sessions)})", expanded=True):
+        for sess in saved_sessions:
+            s_id = sess.get("id", "")
+            is_active = (s_id == st.session_state.get("current_session_id"))
+            s_title = sess.get("title", "Conversation")
+
+            c_hist1, c_hist2 = st.columns([5, 1])
+            with c_hist1:
+                icon = "🟢 " if is_active else "💬 "
+                if st.button(f"{icon}{s_title}", key=f"hist_btn_{s_id}", use_container_width=True, help=f"Updated: {sess.get('updated_at', '')}"):
+                    switch_to_chat_session(s_id)
+                    st.rerun()
+            with c_hist2:
+                if st.button("🗑️", key=f"del_btn_{s_id}", help="Delete this chat"):
+                    delete_chat_session(s_id)
+                    st.rerun()
 
 st.sidebar.markdown("---")
 
-st.sidebar.subheader(
-    "🔎 Search scope"
-)
+# 2. Document Search Scope Selection
+documents = fetch_documents()
 
-
-documents = get_documents()
-
-
-# ---------------------------------------------------------
-# Build document options
-# ---------------------------------------------------------
-
-document_options = {
-    "🌐 All documents": None
-}
-
-for document in documents:
-
-    document_id = document.get(
-        "document_id"
+if documents:
+    st.sidebar.subheader("🎯 Active Document Scope")
+    scope_mode = st.sidebar.radio(
+        "Search Mode",
+        ["Single Document", "Multi-Document Scope"],
+        horizontal=True,
     )
 
-    filename = document.get(
-        "filename",
-        "Unknown document",
-    )
+    doc_options = {d["document_id"]: f"📄 {d['filename']}" for d in documents}
 
-    if document_id:
-        document_options[
-            f"📄 {filename}"
-        ] = document_id
+    if scope_mode == "Single Document":
+        choices = {"🌐 All Indexed Documents": None}
+        for d in documents:
+            choices[f"📄 {d['filename']}"] = d["document_id"]
 
+        def_idx = 0
+        if st.session_state.active_doc_id:
+            for idx, (_, d_id) in enumerate(choices.items()):
+                if d_id == st.session_state.active_doc_id:
+                    def_idx = idx
+                    break
 
-# ---------------------------------------------------------
-# Determine default selection
-# ---------------------------------------------------------
-
-default_index = 0
-
-if st.session_state.current_document_id:
-
-    for index, (
-        label,
-        doc_id,
-    ) in enumerate(
-        document_options.items()
-    ):
-
-        if (
-            doc_id
-            == st.session_state.current_document_id
-        ):
-            default_index = index
-            break
-
-
-selected_label = st.sidebar.selectbox(
-    "Select document",
-    list(document_options.keys()),
-    index=default_index,
-)
-
-
-selected_document_id = document_options[
-    selected_label
-]
-
-
-# ---------------------------------------------------------
-# Update session state
-# ---------------------------------------------------------
-
-if selected_document_id:
-
-    st.session_state.current_document_id = (
-        selected_document_id
-    )
-
-    st.session_state.current_document_name = (
-        selected_label.replace(
-            "📄 ",
-            "",
+        selected_label = st.sidebar.selectbox(
+            "Select document to chat with:",
+            list(choices.keys()),
+            index=def_idx,
+            key=f"doc_scope_selector_{st.session_state.get('active_doc_id')}",
         )
-    )
+        selected_id = choices[selected_label]
+        st.session_state.active_doc_id = selected_id
+        st.session_state.selected_document_ids = [selected_id] if selected_id else []
+
+        if selected_id:
+            st.sidebar.info(f"Targeting: **{selected_label.replace('📄 ', '')}**")
+        else:
+            st.sidebar.warning("Searching across **ALL** documents.")
+
+    else:
+        selected_docs = st.sidebar.multiselect(
+            "Select documents to query simultaneously:",
+            options=list(doc_options.keys()),
+            format_func=lambda x: doc_options.get(x, x),
+            default=[d for d in st.session_state.selected_document_ids if d in doc_options],
+        )
+        st.session_state.selected_document_ids = selected_docs
+        if selected_docs:
+            st.sidebar.info(f"Targeting **{len(selected_docs)}** document(s).")
+        else:
+            st.sidebar.warning("Searching across **ALL** documents.")
 
 else:
+    st.sidebar.info("No documents indexed yet. Upload a document to get started.")
 
-    st.session_state.current_document_id = None
-
-    st.session_state.current_document_name = None
-
-
-# =========================================================
-# CURRENT DOCUMENT STATUS
-# =========================================================
-
-if st.session_state.current_document_id:
-
-    st.sidebar.success(
-        f"Searching only:\n\n"
-        f"**{st.session_state.current_document_name}**"
-    )
-
-else:
-
-    st.sidebar.warning(
-        "Searching across all indexed documents."
-    )
+st.sidebar.markdown("---")
+if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
+    st.session_state.messages = []
+    st.rerun()
 
 
 # =========================================================
-# MAIN: TYPED QUESTION
+# MAIN CONTENT TABS
 # =========================================================
 
-st.subheader(
-    "⌨️ Ask by typing"
-)
+tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
+    "💬 ChatGPT-Style Chat & Q&A",
+    "✍️ Document Studio (Edit & Export)",
+    "📝 Document Summarization",
+    "⚖️ Document Comparison",
+    "📊 Structured Extraction",
+])
 
 
-lang_choice = st.selectbox(
-    "Answer language",
-    list(LANG_CODE.keys()),
-)
+# =========================================================
+# TAB 1: CHATGPT-STYLE MASTER CHAT & Q&A
+# =========================================================
 
-
-question = st.text_input(
-    "Your question (English / हिन्दी / ગુજરાતી)"
-)
-
-
-if st.button(
-    "Ask",
-    type="primary",
-) and question:
-
-    with st.spinner(
-        "Retrieving and generating answer..."
-    ):
-
-        try:
-
-            response = requests.post(
-                f"{API_URL}/ask",
-                json={
-                    "question": question,
-                    "lang_hint": LANG_CODE[
-                        lang_choice
-                    ],
-                    "document_id": (
-                        st.session_state.current_document_id
-                    ),
-                    "top_k": 8,
-                },
-                timeout=120,
-            )
-
-            if response.ok:
-
-                render_result(
-                    response.json()
-                )
-
+with tab_chat:
+    if st.session_state.selected_document_ids and len(st.session_state.selected_document_ids) == 1:
+        cur_d_id = st.session_state.selected_document_ids[0]
+        target_name = next(
+            (d["filename"] for d in documents if d["document_id"] == cur_d_id),
+            "Selected Document"
+        )
+        active_alert = st.session_state.get("doc_action_alerts", {}).get(cur_d_id)
+        if active_alert:
+            req_act = active_alert.get("requires_action", False)
+            d_line = active_alert.get("deadline")
+            if req_act:
+                badge = "⚠️ Action Required" + (f" (Due: {d_line})" if d_line and str(d_line).lower() not in ["null", "none", ""] else "")
+                st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#dc2626; font-weight:600;'>{badge}</span>", unsafe_allow_html=True)
             else:
+                st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#16a34a; font-weight:600;'>✅ Informational Document (No Action Needed)</span>", unsafe_allow_html=True)
+        else:
+            st.caption(f"🎯 Actively querying: **{target_name}**")
+    elif len(st.session_state.selected_document_ids) > 1:
+        st.caption(f"🎯 Actively querying **{len(st.session_state.selected_document_ids)}** selected documents.")
+    else:
+        st.caption("🌐 Querying across all uploaded documents.")
 
-                st.error(
-                    response.text
-                )
+    # -------------------------------------------------------------
+    # ChatGPT-Style Full-Height Natural Conversation Feed
+    # -------------------------------------------------------------
+    if not st.session_state.messages:
+        st.markdown("""
+        <div style="text-align: center; padding: 60px 20px 30px 20px; color: #64748b;">
+            <div style="font-size: 44px; margin-bottom: 12px;">📄</div>
+            <h3 style="color: #1e293b; margin-bottom: 8px; font-weight: 700; font-size: 24px;">DocMind AI Workspace</h3>
+            <p style="font-size: 15px; max-width: 600px; margin: 0 auto 24px auto; color: #64748b; line-height: 1.6;">
+                Upload contracts, reports, tax notices, or medical records. Ask questions, compare documents, or get proactive deadline and action alerts.
+            </p>
+            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">📎 Click <strong>(+)</strong> to Upload & Index</span>
+                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">⚡ Proactive Action & Deadline Alerts</span>
+                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">🎙️ Trilingual English / हिन्दी / ગુજરાતી</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        for idx, msg in enumerate(st.session_state.messages):
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-        except requests.RequestException as e:
+                if msg["role"] == "assistant":
+                    col_m1, col_m2 = st.columns([4, 1])
+                    with col_m1:
+                        conf = msg.get("confidence")
+                        if conf == "high":
+                            st.markdown('<span class="badge-high">🟢 High Confidence</span>', unsafe_allow_html=True)
+                        elif conf == "medium":
+                            st.markdown('<span class="badge-med">🟡 Medium Confidence</span>', unsafe_allow_html=True)
+                        elif conf == "low":
+                            st.markdown('<span class="badge-low">🔴 Low Confidence / Grounding Guardrail</span>', unsafe_allow_html=True)
 
-            st.error(
-                f"Backend connection error: {e}"
+                        if msg.get("rewritten_query"):
+                            st.caption(f"🔍 *Decontextualized search query:* `{msg['rewritten_query']}`")
+
+                    with col_m2:
+                        # 🔊 Speaker / Listen Button (ChatGPT-Style Audio Playback)
+                        if st.button("🔊 Listen", key=f"speak_btn_{idx}", help="Play answer audio"):
+                            audio_url = msg.get("audio_url")
+                            if not audio_url:
+                                audio_url = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
+                                msg["audio_url"] = audio_url
+                            if audio_url:
+                                st.session_state.audio_cache[idx] = audio_url
+
+                    if idx in st.session_state.audio_cache:
+                        st.audio(st.session_state.audio_cache[idx], format="audio/mp3")
+
+                    # 🔔 Proactive Action & Deadline Controls (Trilingual Switcher & Voice)
+                    alert_info = msg.get("action_alert")
+                    doc_id_ref = msg.get("doc_id") or st.session_state.active_doc_id
+                    if alert_info:
+                        with st.expander("🔔 Action Alert: Translate & 🔊 Read Aloud", expanded=False):
+                            ca1, ca2 = st.columns([3, 2])
+                            with ca1:
+                                cur_l = alert_info.get("language", "en")
+                                opts_l = ["en", "hi", "gu"]
+                                def_idx = opts_l.index(cur_l) if cur_l in opts_l else 0
+                                new_l = st.radio(
+                                    "Alert Language:",
+                                    opts_l,
+                                    index=def_idx,
+                                    format_func=lambda x: {"en": "🇬🇧 English", "hi": "🇮🇳 हिन्दी (Hindi)", "gu": "🇮🇳 ગુજરાતી (Gujarati)"}[x],
+                                    horizontal=True,
+                                    key=f"alert_lang_radio_{idx}",
+                                )
+                                if new_l != cur_l and doc_id_ref:
+                                    try:
+                                        r_al = requests.get(f"{API_URL}/document/{doc_id_ref}/action-alert", params={"language": new_l}, timeout=30)
+                                        if r_al.ok:
+                                            new_alert_data = r_al.json().get("action_alert", {})
+                                            old_md = format_action_alert_markdown(alert_info)
+                                            new_md = format_action_alert_markdown(new_alert_data)
+                                            msg["action_alert"] = new_alert_data
+                                            if old_md in msg["content"]:
+                                                msg["content"] = msg["content"].replace(old_md, new_md)
+                                            st.session_state.setdefault("doc_action_alerts", {})[doc_id_ref] = new_alert_data
+                                            st.rerun()
+                                    except Exception as err:
+                                        st.error(f"Translation failed: {err}")
+
+                            with ca2:
+                                if st.button("🔊 Listen to Alert", key=f"listen_alert_btn_{idx}", help="Read alert aloud in selected language"):
+                                    speak_text = alert_info.get("alert_markdown") or alert_info.get("action_summary", "")
+                                    aud_url = synthesize_audio_api(speak_text, alert_info.get("language", "en"))
+                                    if aud_url:
+                                        st.session_state.audio_cache[f"alert_audio_{idx}"] = aud_url
+
+                            if f"alert_audio_{idx}" in st.session_state.audio_cache:
+                                st.audio(st.session_state.audio_cache[f"alert_audio_{idx}"], format="audio/mp3")
+
+                    # Source Citations
+                    sources = msg.get("sources", [])
+                    if sources:
+                        with st.expander(f"📖 Sources & Evidence ({len(sources)} citations)", expanded=False):
+                            for s in sources:
+                                st.markdown(f"""
+                                <div class="source-card">
+                                    <strong>📄 {s['source']}</strong> — Page {s['page']} &nbsp;·&nbsp; <em>Relevance: {s['score']}</em><br/>
+                                    <small style="color:#555;">"{s.get('snippet', '')}"</small>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+    # -------------------------------------------------------------
+    # ChatGPT-Style Floating Bottom Docked Searchbar
+    # -------------------------------------------------------------
+    with st._bottom:
+        chat_val = chat_bar_component(key="unified_chat_bar")
+
+    if chat_val and chat_val.get("msg_id") != st.session_state.get("last_chat_bar_msg_id"):
+        st.session_state.last_chat_bar_msg_id = chat_val.get("msg_id")
+
+        # 1. File Upload with Optional Prompt (ChatGPT Searchbar Plus Button)
+        if chat_val.get("type") == "file_and_prompt":
+            fname = chat_val.get("filename", "document")
+            raw_b64 = chat_val.get("file_base64", "")
+            prompt = chat_val.get("content", "").strip()
+
+            if raw_b64:
+                file_bytes = base64.b64decode(raw_b64)
+                with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
+                    try:
+                        files = {"file": (fname, file_bytes)}
+                        res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
+                        if res.ok:
+                            data = res.json()
+                            new_doc_id = data["document_id"]
+                            action_alert = data.get("action_alert", {})
+                            st.session_state.setdefault("doc_action_alerts", {})[new_doc_id] = action_alert
+                            st.session_state.active_doc_id = new_doc_id
+                            st.session_state.selected_document_ids = [new_doc_id]
+
+                            alert_block = format_action_alert_markdown(action_alert)
+
+                            if prompt:
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": f"📄 **[{fname}]**\n\n{prompt}",
+                                })
+                                with st.spinner("Analyzing attached document with Master Model..."):
+                                    try:
+                                        history_payload = [
+                                            {"role": m["role"], "content": m["content"]}
+                                            for m in st.session_state.messages[:-1]
+                                        ]
+                                        payload = {
+                                            "question": prompt,
+                                            "document_ids": [new_doc_id],
+                                            "history": history_payload,
+                                            "top_k": 8,
+                                        }
+                                        ask_res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
+                                        if ask_res.ok:
+                                            result = ask_res.json()
+                                            answer_text = result.get("answer", "No answer returned.")
+                                            full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
+                                            st.session_state.messages.append({
+                                                "role": "assistant",
+                                                "content": full_reply,
+                                                "confidence": result.get("confidence", "high"),
+                                                "sources": result.get("sources", []),
+                                                "rewritten_query": result.get("rewritten_query"),
+                                                "detected_language": result.get("detected_language", "en"),
+                                                "action_alert": action_alert,
+                                                "doc_id": new_doc_id,
+                                            })
+                                        else:
+                                            st.session_state.messages.append({
+                                                "role": "assistant",
+                                                "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
+                                                "confidence": "low",
+                                                "sources": [],
+                                                "action_alert": action_alert,
+                                                "doc_id": new_doc_id,
+                                            })
+                                    except Exception as ask_err:
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
+                                            "confidence": "low",
+                                            "sources": [],
+                                            "action_alert": action_alert,
+                                            "doc_id": new_doc_id,
+                                        })
+                            else:
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": f"📎 Attached document: **{fname}**",
+                                })
+                                welcome_msg = f"✅ Successfully indexed **{fname}** ({data.get('chunks_indexed', 0)} chunks).\n\n{alert_block}\n\nAsk me any question about this document, request a summary, or open Document Studio to modify it!"
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": welcome_msg,
+                                    "confidence": "high",
+                                    "sources": [],
+                                    "action_alert": action_alert,
+                                    "doc_id": new_doc_id,
+                                })
+
+                            save_current_chat_session()
+                            st.rerun()
+                        else:
+                            st.error(f"Upload failed: {res.text}")
+                    except Exception as e:
+                        st.error(f"Upload error: {e}")
+
+        # 2. Text Query (Typed or Web Speech Recognition Transcribed)
+        elif chat_val.get("type") == "text":
+            prompt = chat_val.get("content", "").strip()
+            if prompt:
+                st.session_state.messages.append({"role": "user", "content": prompt})
+
+                history_payload = [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages[:-1]
+                ]
+
+                with st.spinner("Analyzing context with Master Model..."):
+                    try:
+                        payload = {
+                            "question": prompt,
+                            "document_ids": st.session_state.selected_document_ids,
+                            "history": history_payload,
+                            "top_k": 8,
+                        }
+                        res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
+
+                        if res.ok:
+                            result = res.json()
+                            ans = result.get("answer", "No answer returned.")
+                            conf = result.get("confidence", "medium")
+                            sources = result.get("sources", [])
+                            rewritten = result.get("rewritten_query")
+                            det_lang = result.get("detected_language", "en")
+
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": ans,
+                                "confidence": conf,
+                                "sources": sources,
+                                "rewritten_query": rewritten,
+                                "detected_language": det_lang,
+                            })
+                            save_current_chat_session()
+                            st.rerun()
+                        else:
+                            st.error(f"Error ({res.status_code}): {res.text}")
+                    except Exception as e:
+                        st.error(f"Connection error: {e}")
+
+        # 2. Audio Query Fallback (MediaRecorder recorded base64 audio)
+        elif chat_val.get("type") == "audio_base64":
+            raw_b64 = chat_val.get("audio", "")
+            if raw_b64:
+                audio_bytes = base64.b64decode(raw_b64)
+                hist = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+                with st.spinner("Transcribing and analyzing voice with Gemini 3.6 Flash..."):
+                    try:
+                        files = {"file": ("voice_q.webm", audio_bytes, "audio/webm")}
+                        data = {
+                            "document_ids": json.dumps(st.session_state.selected_document_ids),
+                            "speak_reply": "true",
+                            "history": json.dumps(hist),
+                        }
+                        res = requests.post(f"{API_URL}/ask-voice", files=files, data=data, timeout=180)
+                        if res.ok:
+                            result = res.json()
+                            user_text = result.get("transcribed_question", "Voice Query")
+                            st.session_state.messages.append({
+                                "role": "user",
+                                "content": f"🎤 {user_text}",
+                            })
+
+                            audio_url = None
+                            if result.get("audio_reply_path"):
+                                fname = result["audio_reply_path"].replace("\\", "/").split("/")[-1]
+                                audio_url = f"{API_URL}/audio/{fname}"
+
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": result.get("answer", ""),
+                                "confidence": result.get("confidence", "medium"),
+                                "sources": result.get("sources", []),
+                                "rewritten_query": result.get("rewritten_query"),
+                                "detected_language": result.get("detected_language", "en"),
+                                "audio_url": audio_url,
+                            })
+                            save_current_chat_session()
+                            st.rerun()
+                        else:
+                            st.error(f"Voice error: {res.text}")
+                    except Exception as e:
+                        st.error(f"Connection error: {e}")
+
+
+# =========================================================
+# TAB 2: [NEW] DOCUMENT STUDIO (EDIT, AUGMENT & EXPORT)
+# =========================================================
+
+with tab_studio:
+    st.markdown("### ✍️ Document Studio: Prompt-Based Augmenter & Exporter")
+    st.caption("Upload a document directly to add new sections, appendices, payment terms, or update clauses via AI prompt, then export to PDF or DOCX.")
+
+    col_upload, col_opts = st.columns([3, 2])
+    with col_upload:
+        studio_file = st.file_uploader(
+            "📁 Upload Document to Modify & Export (PDF, Word, TXT, Excel, etc.):",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "pptx"],
+            key="studio_direct_file_uploader",
+            help="Drag and drop or browse the specific document you want to edit with Document Studio.",
+        )
+        use_active_doc = False
+        if st.session_state.active_doc_id and not studio_file:
+            active_name = next(
+                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+                "Active Document"
+            )
+            use_active_doc = st.checkbox(
+                f"⚡ Or use currently active chat document: **{active_name}**",
+                value=False,
+                key="studio_use_active_check",
             )
 
+    with col_opts:
+        export_format = st.radio(
+            "Export Format",
+            ["DOCX (.docx)", "PDF (.pdf)"],
+            horizontal=True,
+            key="studio_export_fmt",
+        )
+        fmt_ext = "docx" if "docx" in export_format.lower() else "pdf"
 
-# =========================================================
-# DIVIDER
-# =========================================================
+        edit_mode_label = st.radio(
+            "Modification Mode",
+            [
+                "➕ Append New Section / Appendix (Fast & Safe)",
+                "✏️ Revise / Edit Existing Sections",
+            ],
+            help="Append mode drafts only the new content using minimal tokens, completely avoiding 429 quota limits, and appends it to your full document.",
+            key="studio_mode_radio",
+        )
+        selected_mode = "append" if "Append" in edit_mode_label else "revise"
 
-st.divider()
-
-
-# =========================================================
-# MAIN: VOICE QUESTION
-# =========================================================
-
-st.subheader(
-    "🎤 Ask by speaking"
-)
-
-st.caption(
-    "Record your question in English, Hindi, or Gujarati. "
-    "The system will automatically detect the language."
-)
-
-
-audio_bytes = audio_recorder(
-    text="Click to record",
-    recording_color="#e8483e",
-    neutral_color="#444",
-)
-
-
-if audio_bytes:
-
-    st.audio(
-        audio_bytes,
-        format="audio/wav",
+    prompt_instruction = st.text_area(
+        "Enter your update instruction (e.g. Add sections, clauses, or appendices):",
+        placeholder="e.g., Add Section 6: Payment Terms & Milestones (40% advance, 60% upon delivery with 30-day net credit). Include an SLA clause guaranteeing 99.9% uptime with 5% monthly penalty for breaches.",
+        height=110,
+        key="studio_prompt_instruction",
     )
 
-    if st.button(
-        "🎙️ Transcribe and answer",
-    ):
+    auto_index_check = st.checkbox(
+        "Auto-index updated document into DocMind (so you can immediately chat with the updated version)",
+        value=True,
+        key="studio_auto_index_check",
+    )
 
-        with st.spinner(
-            "Transcribing and generating answer..."
-        ):
+    if st.button("✨ Generate & Export Updated Document", type="primary", key="studio_generate_btn"):
+        target_doc_id = None
+        target_filename = ""
+        if studio_file:
+            target_filename = studio_file.name
+            with st.spinner(f"Preparing {target_filename}..."):
+                target_doc_id = ensure_uploaded_to_backend(studio_file, cache_prefix="studio")
+        elif use_active_doc and st.session_state.active_doc_id:
+            target_doc_id = st.session_state.active_doc_id
+            target_filename = active_name
 
-            try:
+        if not target_doc_id:
+            st.warning("⚠️ Please upload a document above to begin modifying.")
+        elif not prompt_instruction.strip():
+            st.warning("⚠️ Please enter an update instruction.")
+        else:
+            with st.spinner(f"Drafting updates for {target_filename} with Gemini and compiling document..."):
+                try:
+                    payload = {
+                        "document_id": target_doc_id,
+                        "instruction": prompt_instruction,
+                        "export_format": fmt_ext,
+                        "auto_index": auto_index_check,
+                        "edit_mode": selected_mode,
+                    }
+                    res = requests.post(f"{API_URL}/document/edit", json=payload, timeout=180)
+                    if res.ok:
+                        data = res.json()
+                        new_file_name = data["filename"]
+                        download_url = f"{API_URL}{data['download_url']}"
 
-                files = {
-                    "file": (
-                        "question.wav",
-                        audio_bytes,
-                        "audio/wav",
-                    )
-                }
+                        st.success(f"🎉 Successfully created **{new_file_name}**!")
 
-                response = requests.post(
-                    f"{API_URL}/ask-voice",
-                    files=files,
-                    params={
-                        "document_id": (
-                            st.session_state.current_document_id
-                        ),
-                        "speak_reply": True,
-                    },
-                    timeout=180,
-                )
+                        file_bytes = requests.get(download_url).content
+                        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if fmt_ext == "docx" else "application/pdf"
 
-                if response.ok:
-
-                    result = response.json()
-
-                    # -----------------------------------------
-                    # Transcription
-                    # -----------------------------------------
-
-                    st.info(
-                        f'Heard: '
-                        f'"{result.get("transcribed_question", "")}" '
-                        f'(detected: '
-                        f'{result.get("detected_language", "unknown")})'
-                    )
-
-                    # -----------------------------------------
-                    # Answer
-                    # -----------------------------------------
-
-                    render_result(
-                        result
-                    )
-
-                    # -----------------------------------------
-                    # Audio reply
-                    # -----------------------------------------
-
-                    audio_reply_path = result.get(
-                        "audio_reply_path"
-                    )
-
-                    if audio_reply_path:
-
-                        filename = (
-                            audio_reply_path
-                            .replace("\\", "/")
-                            .split("/")[-1]
+                        st.download_button(
+                            label=f"📥 Download {new_file_name}",
+                            data=file_bytes,
+                            file_name=new_file_name,
+                            mime=mime_type,
+                            type="primary",
+                            key="studio_download_btn",
                         )
 
-                        audio_response = requests.get(
-                            f"{API_URL}/audio/{filename}",
-                            timeout=30,
-                        )
+                        if auto_index_check:
+                            st.info(f"✅ Indexed {data.get('indexed_chunks', 0)} chunks into vector store. You can now chat with it in Tab 1!")
 
-                        if audio_response.ok:
+                        with st.expander("📄 Preview Generated Document Content", expanded=True):
+                            st.markdown(data.get("updated_content", ""))
+                    else:
+                        st.error(f"Studio error: {res.text}")
+                except Exception as e:
+                    st.error(f"Connection error: {e}")
 
-                            st.markdown(
-                                "### 🔊 Listen to the answer"
-                            )
 
-                            st.audio(
-                                audio_response.content,
-                                format="audio/mp3",
-                            )
+# =========================================================
+# TAB 3: DOCUMENT SUMMARIZATION (Token-Budgeted)
+# =========================================================
 
-                else:
+with tab_summarize:
+    st.markdown("### 📝 Intelligent Document Summarization")
+    st.caption("Upload a document directly to generate executive, detailed, or action-oriented summaries in English, Hindi, or Gujarati.")
 
-                    st.error(
-                        response.text
-                    )
+    col_sum_up, col_sum_opt = st.columns([3, 2])
+    with col_sum_up:
+        sum_file = st.file_uploader(
+            "📁 Upload Document to Summarize (PDF, Word, Excel, CSV, PPTX, TXT):",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+            key="sum_direct_file_uploader",
+            help="Drag and drop or browse the specific document you want to summarize.",
+        )
+        use_active_doc_sum = False
+        if st.session_state.active_doc_id and not sum_file:
+            active_name = next(
+                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+                "Active Document"
+            )
+            use_active_doc_sum = st.checkbox(
+                f"⚡ Or summarize currently active chat document: **{active_name}**",
+                value=False,
+                key="sum_use_active_check",
+            )
 
-            except requests.RequestException as e:
+    with col_sum_opt:
+        sum_type = st.selectbox(
+            "Summary Format",
+            ["executive", "detailed", "bullet_points"],
+            format_func=lambda x: x.replace("_", " ").title(),
+            key="sum_format_select",
+        )
+        sum_lang = st.selectbox(
+            "Output Language",
+            ["en", "hi", "gu"],
+            format_func=lambda x: {"en": "English", "hi": "हिन्दी (Hindi)", "gu": "ગુજરાતી (Gujarati)"}[x],
+            key="sum_lang_select",
+        )
 
-                st.error(
-                    f"Backend connection error: {e}"
-                )
+    if st.button("✨ Generate Summary", type="primary", key="btn_gen_summary"):
+        target_doc_id = None
+        target_filename = ""
+        if sum_file:
+            target_filename = sum_file.name
+            with st.spinner(f"Preparing {target_filename}..."):
+                target_doc_id = ensure_uploaded_to_backend(sum_file, cache_prefix="summarize")
+        elif use_active_doc_sum and st.session_state.active_doc_id:
+            target_doc_id = st.session_state.active_doc_id
+            target_filename = active_name
+
+        if not target_doc_id:
+            st.warning("⚠️ Please upload a document above to summarize.")
+        else:
+            with st.spinner(f"Reading {target_filename} and generating summary with Gemini..."):
+                try:
+                    payload = {
+                        "document_id": target_doc_id,
+                        "summary_type": sum_type,
+                        "language": sum_lang,
+                    }
+                    res = requests.post(f"{API_URL}/summarize", json=payload, timeout=120)
+                    if res.ok:
+                        data = res.json()
+                        st.success(f"Summary for: **{data['filename']}**")
+                        st.markdown(data.get("summary", ""))
+                    else:
+                        st.error(f"Summarization error: {res.text}")
+                except Exception as e:
+                    st.error(f"Failed to connect: {e}")
+
+
+# =========================================================
+# TAB 4: DOCUMENT COMPARISON (Token-Budgeted)
+# =========================================================
+
+with tab_compare:
+    st.markdown("### ⚖️ Cross-Document Comparison")
+    st.caption("Upload two documents directly to compare requirements, terms, budgets, and key differences.")
+
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        st.markdown("#### 📄 Document A (Base Document)")
+        file_a = st.file_uploader(
+            "Upload Document A (PDF, Word, Excel, PPTX, TXT):",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+            key="comp_direct_file_a",
+        )
+        use_active_doc_a = False
+        if st.session_state.active_doc_id and not file_a:
+            active_name = next(
+                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+                "Active Document"
+            )
+            use_active_doc_a = st.checkbox(
+                f"⚡ Use active chat document as Doc A: **{active_name}**",
+                value=False,
+                key="comp_use_active_a_check",
+            )
+
+    with col_c2:
+        st.markdown("#### 📄 Document B (Comparison Target)")
+        file_b = st.file_uploader(
+            "Upload Document B (PDF, Word, Excel, PPTX, TXT):",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+            key="comp_direct_file_b",
+        )
+
+    col_f1, col_f2 = st.columns([3, 1])
+    with col_f1:
+        focus = st.text_input(
+            "Specific Focus Area (Optional)",
+            value="Differences in budget, requirements, deadlines, and deliverables",
+            key="comp_focus_input",
+        )
+    with col_f2:
+        comp_lang = st.selectbox(
+            "Comparison Language",
+            ["en", "hi", "gu"],
+            format_func=lambda x: {"en": "English", "hi": "हिन्दी (Hindi)", "gu": "ગુજરાતી (Gujarati)"}[x],
+            key="comp_lang_select",
+        )
+
+    if st.button("⚖️ Compare Documents", type="primary", key="btn_compare_docs"):
+        doc_a_id = None
+        doc_b_id = None
+
+        if file_a:
+            with st.spinner(f"Preparing {file_a.name}..."):
+                doc_a_id = ensure_uploaded_to_backend(file_a, cache_prefix="comp_a")
+        elif use_active_doc_a and st.session_state.active_doc_id:
+            doc_a_id = st.session_state.active_doc_id
+
+        if file_b:
+            with st.spinner(f"Preparing {file_b.name}..."):
+                doc_b_id = ensure_uploaded_to_backend(file_b, cache_prefix="comp_b")
+
+        if not doc_a_id or not doc_b_id:
+            st.warning("⚠️ Please provide both Document A and Document B above to run the comparison.")
+        elif doc_a_id == doc_b_id:
+            st.warning("⚠️ Document A and Document B must be different files.")
+        else:
+            with st.spinner("Analyzing differences with Gemini..."):
+                try:
+                    payload = {
+                        "document_ids": [doc_a_id, doc_b_id],
+                        "focus_aspects": focus,
+                        "language": comp_lang,
+                    }
+                    res = requests.post(f"{API_URL}/compare", json=payload, timeout=180)
+                    if res.ok:
+                        data = res.json()
+                        st.markdown(data.get("comparison", ""))
+                    else:
+                        st.error(f"Comparison error: {res.text}")
+                except Exception as e:
+                    st.error(f"Failed to connect: {e}")
+
+
+# =========================================================
+# TAB 5: STRUCTURED INFORMATION EXTRACTION (Token-Budgeted)
+# =========================================================
+
+with tab_extract:
+    st.markdown("### 📊 Structured Information Extraction")
+    st.caption("Upload a document directly to extract key entities, financial numbers, milestone deadlines, and tables into structured JSON.")
+
+    col_ext_up, col_ext_opt = st.columns([3, 2])
+    with col_ext_up:
+        ext_file = st.file_uploader(
+            "📁 Upload Document for Structured Extraction (PDF, Word, Excel, CSV, PPTX, TXT):",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+            key="extract_direct_file_uploader",
+            help="Drag and drop or browse the specific document you want to extract structured data from.",
+        )
+        use_active_doc_ext = False
+        if st.session_state.active_doc_id and not ext_file:
+            active_name = next(
+                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+                "Active Document"
+            )
+            use_active_doc_ext = st.checkbox(
+                f"⚡ Or extract from currently active chat document: **{active_name}**",
+                value=False,
+                key="extract_use_active_check",
+            )
+
+    with col_ext_opt:
+        ext_type = st.selectbox(
+            "Extraction Schema",
+            ["full_schema", "financials", "dates_deadlines", "key_entities"],
+            format_func=lambda x: x.replace("_", " ").title(),
+            key="extract_schema_select",
+        )
+
+    if st.button("🔍 Extract Structured Data", type="primary", key="btn_extract_data"):
+        target_doc_id = None
+        target_filename = ""
+        if ext_file:
+            target_filename = ext_file.name
+            with st.spinner(f"Preparing {target_filename}..."):
+                target_doc_id = ensure_uploaded_to_backend(ext_file, cache_prefix="extract")
+        elif use_active_doc_ext and st.session_state.active_doc_id:
+            target_doc_id = st.session_state.active_doc_id
+            target_filename = active_name
+
+        if not target_doc_id:
+            st.warning("⚠️ Please upload a document above for extraction.")
+        else:
+            with st.spinner(f"Extracting entities and attributes from {target_filename} with Gemini..."):
+                try:
+                    payload = {
+                        "document_id": target_doc_id,
+                        "extraction_type": ext_type,
+                    }
+                    res = requests.post(f"{API_URL}/extract", json=payload, timeout=120)
+                    if res.ok:
+                        data = res.json()
+
+                        if data.get("summary_points"):
+                            st.subheader("📌 Key Highlights")
+                            for pt in data["summary_points"]:
+                                st.write(f"- {pt}")
+
+                        if data.get("extracted_items"):
+                            st.subheader("📋 Extracted Attributes")
+                            st.dataframe(data["extracted_items"], use_container_width=True)
+
+                        if data.get("tables_detected"):
+                            st.subheader("📊 Detected Tables")
+                            for tbl in data["tables_detected"]:
+                                st.markdown(f"**{tbl.get('table_name', 'Table')}**")
+                                headers = tbl.get("headers", [])
+                                rows = tbl.get("rows", [])
+                                if headers and rows:
+                                    import pandas as pd
+                                    df = pd.DataFrame(rows, columns=headers)
+                                    st.dataframe(df, use_container_width=True)
+
+                        with st.expander("📄 View Raw JSON Output"):
+                            st.json(data)
+                    else:
+                        st.error(f"Extraction error: {res.text}")
+                except Exception as e:
+                    st.error(f"Failed to connect: {e}")

@@ -1,5 +1,6 @@
 # app/core/vectorstore.py
 
+from typing import List, Dict, Any
 import chromadb
 from rank_bm25 import BM25Okapi
 
@@ -9,82 +10,52 @@ from app.core.embedder import Embedder
 class VectorStore:
     def __init__(
         self,
-        persist_dir="app/data/vectorstore",
-        collection_name="documents",
+        persist_dir: str = "app/data/vectorstore",
+        collection_name: str = "documents",
     ):
-        # ---------------------------------------------------------
-        # ChromaDB
-        # ---------------------------------------------------------
-        self.client = chromadb.PersistentClient(
-            path=persist_dir
-        )
-
+        self.client = chromadb.PersistentClient(path=persist_dir)
+        self.collection_name = collection_name
         self.collection = self.client.get_or_create_collection(
-            collection_name
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"},
         )
-
-        # ---------------------------------------------------------
-        # Embedding model
-        # ---------------------------------------------------------
         self.embedder = Embedder()
-
-        # ---------------------------------------------------------
-        # BM25
-        # ---------------------------------------------------------
         self.bm25 = None
         self.bm25_docs = []
 
         self._rebuild_bm25_from_existing()
 
     # =========================================================
-    # BM25 - Rebuild from ChromaDB
+    # BM25 - REBUILD INDEX
     # =========================================================
 
     def _rebuild_bm25_from_existing(self):
-        existing = self.collection.get(
-            include=["documents", "metadatas"]
-        )
+        try:
+            existing = self.collection.get(include=["documents", "metadatas"])
+            if not existing.get("ids"):
+                self.bm25 = None
+                self.bm25_docs = []
+                return
 
-        if not existing.get("ids"):
-            return
-
-        self.bm25_docs = []
-
-        for doc, metadata in zip(
-            existing.get("documents", []),
-            existing.get("metadatas", []),
-        ):
-            metadata = metadata or {}
-
-            document_id = metadata.get(
-                "document_id",
-                metadata.get("source", "unknown"),
-            )
-
-            self.bm25_docs.append(
-                {
+            self.bm25_docs = []
+            for doc, metadata in zip(
+                existing.get("documents", []),
+                existing.get("metadatas", []),
+            ):
+                metadata = metadata or {}
+                document_id = str(metadata.get("document_id", metadata.get("source", "unknown")))
+                self.bm25_docs.append({
                     "text": doc,
-                    "source": metadata.get(
-                        "source",
-                        "unknown",
-                    ),
-                    "page": metadata.get(
-                        "page",
-                        1,
-                    ),
-                    "chunk": metadata.get(
-                        "chunk",
-                        0,
-                    ),
+                    "source": metadata.get("source", "unknown"),
+                    "page": int(metadata.get("page", 1)),
+                    "chunk": int(metadata.get("chunk", 0)),
                     "document_id": document_id,
-                }
-            )
+                })
 
-        self._rebuild_bm25()
-
-    # =========================================================
-    # BM25 - Build index
-    # =========================================================
+            self._rebuild_bm25()
+        except Exception:
+            self.bm25 = None
+            self.bm25_docs = []
 
     def _rebuild_bm25(self):
         if not self.bm25_docs:
@@ -95,432 +66,266 @@ class VectorStore:
             doc["text"].lower().split()
             for doc in self.bm25_docs
         ]
-
         if tokenized_documents:
-            self.bm25 = BM25Okapi(
-                tokenized_documents
-            )
+            self.bm25 = BM25Okapi(tokenized_documents)
+        else:
+            self.bm25 = None
 
     # =========================================================
     # ADD CHUNKS
     # =========================================================
 
-    def add_chunks(self, chunks):
+    def add_chunks(self, chunks: List[Dict[str, Any]]):
         if not chunks:
             return
 
-        # -----------------------------------------------------
-        # Texts
-        # -----------------------------------------------------
-        texts = [
-            chunk["text"]
-            for chunk in chunks
-        ]
+        texts = [chunk["text"] for chunk in chunks]
+        embeddings = self.embedder.embed_passages(texts)
+        ids = [chunk["id"] for chunk in chunks]
 
-        # -----------------------------------------------------
-        # Embeddings
-        # -----------------------------------------------------
-        embeddings = self.embedder.embed_passages(
-            texts
-        )
-
-        # -----------------------------------------------------
-        # IDs
-        # -----------------------------------------------------
-        ids = [
-            chunk["id"]
-            for chunk in chunks
-        ]
-
-        # -----------------------------------------------------
-        # Metadata
-        # -----------------------------------------------------
         metadatas = []
+        for chunk in chunks:
+            meta = chunk.get("metadata", {})
+            doc_id = str(meta.get("document_id", meta.get("source", "unknown")))
+            metadatas.append({
+                "source": str(meta.get("source", "unknown")),
+                "page": int(meta.get("page", 1)),
+                "chunk": int(meta.get("chunk", 0)),
+                "document_id": doc_id,
+            })
+
+        try:
+            self.collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=texts,
+                metadatas=metadatas,
+            )
+        except Exception as e:
+            # Handle collection dimension mismatch when embedding model changes
+            if "dimensionality" in str(e).lower() or "dimension" in str(e).lower():
+                self.client.delete_collection(self.collection_name)
+                self.collection = self.client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                self.collection.add(
+                    ids=ids,
+                    embeddings=embeddings,
+                    documents=texts,
+                    metadatas=metadatas,
+                )
+            else:
+                raise e
 
         for chunk in chunks:
-
-            metadata = chunk.get(
-                "metadata",
-                {}
-            )
-
-            document_id = metadata.get(
-                "document_id",
-                metadata.get(
-                    "source",
-                    "unknown",
-                ),
-            )
-
-            metadatas.append(
-                {
-                    "source": metadata.get(
-                        "source",
-                        "unknown",
-                    ),
-                    "page": metadata.get(
-                        "page",
-                        1,
-                    ),
-                    "chunk": metadata.get(
-                        "chunk",
-                        0,
-                    ),
-                    "document_id": document_id,
-                }
-            )
-
-        # -----------------------------------------------------
-        # Store in Chroma
-        # -----------------------------------------------------
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-        )
-
-        # -----------------------------------------------------
-        # Add to BM25
-        # -----------------------------------------------------
-        for chunk in chunks:
-
-            metadata = chunk.get(
-                "metadata",
-                {}
-            )
-
-            document_id = metadata.get(
-                "document_id",
-                metadata.get(
-                    "source",
-                    "unknown",
-                ),
-            )
-
-            self.bm25_docs.append(
-                {
-                    "text": chunk["text"],
-                    "source": metadata.get(
-                        "source",
-                        "unknown",
-                    ),
-                    "page": metadata.get(
-                        "page",
-                        1,
-                    ),
-                    "chunk": metadata.get(
-                        "chunk",
-                        0,
-                    ),
-                    "document_id": document_id,
-                }
-            )
+            meta = chunk.get("metadata", {})
+            doc_id = str(meta.get("document_id", meta.get("source", "unknown")))
+            self.bm25_docs.append({
+                "text": chunk["text"],
+                "source": str(meta.get("source", "unknown")),
+                "page": int(meta.get("page", 1)),
+                "chunk": int(meta.get("chunk", 0)),
+                "document_id": doc_id,
+            })
 
         self._rebuild_bm25()
 
     # =========================================================
-    # SEARCH
+    # ADVANCED HYBRID SEARCH (RRF + Multi-Doc Scope)
     # =========================================================
 
     def search(
         self,
-        query,
-        top_k=8,
-        document_id=None,
-    ):
-        """
-        Hybrid search using:
-
-        1. Semantic search with ChromaDB
-        2. Keyword search with BM25
-
-        If document_id is provided:
-            Search ONLY inside that document.
-
-        If document_id is None:
-            Search across ALL documents.
-        """
-
-        # -----------------------------------------------------
-        # Empty database check
-        # -----------------------------------------------------
-
+        query: str,
+        top_k: int = 8,
+        document_ids: List[str] | str | None = None,
+        min_relevance_threshold: float = 0.05,
+    ) -> List[Dict[str, Any]]:
         if self.collection.count() == 0:
             return []
 
-        # =====================================================
-        # SEMANTIC SEARCH
-        # =====================================================
+        target_ids = None
+        if isinstance(document_ids, str) and document_ids.strip():
+            target_ids = [document_ids.strip()]
+        elif isinstance(document_ids, list) and len(document_ids) > 0:
+            target_ids = [str(d).strip() for d in document_ids if str(d).strip()]
 
-        query_embedding = self.embedder.embed_query(
-            query
-        )
+        # 1. Semantic Dense Search (ChromaDB)
+        query_embedding = self.embedder.embed_query(query)
+        candidate_count = min(max(top_k * 3, 25), self.collection.count())
 
-        # Get extra candidates so hybrid search has
-        # enough results to work with.
-        candidate_k = max(
-            top_k * 3,
-            20,
-        )
-
-        total_documents = self.collection.count()
-
-        candidate_k = min(
-            candidate_k,
-            total_documents,
-        )
-
-        query_kwargs = {
+        query_kwargs: Dict[str, Any] = {
             "query_embeddings": [query_embedding],
-            "n_results": candidate_k,
-            "include": [
-                "documents",
-                "metadatas",
-                "distances",
-            ],
+            "n_results": candidate_count,
+            "include": ["documents", "metadatas", "distances"],
         }
 
-        # -----------------------------------------------------
-        # IMPORTANT:
-        # Filter Chroma by document_id
-        # -----------------------------------------------------
-
-        if document_id:
-            query_kwargs["where"] = {
-                "document_id": document_id
-            }
-
-        semantic_results = self.collection.query(
-            **query_kwargs
-        )
-
-        semantic_items = []
-
-        documents = semantic_results.get(
-            "documents",
-            [[]],
-        )
-
-        metadatas = semantic_results.get(
-            "metadatas",
-            [[]],
-        )
-
-        distances = semantic_results.get(
-            "distances",
-            [[]],
-        )
-
-        if documents and documents[0]:
-
-            for doc, metadata, distance in zip(
-                documents[0],
-                metadatas[0],
-                distances[0],
-            ):
-
-                metadata = metadata or {}
-
-                result_document_id = metadata.get(
-                    "document_id",
-                    metadata.get(
-                        "source",
-                        "unknown",
-                    ),
-                )
-
-                semantic_items.append(
-                    {
-                        "text": doc,
-                        "source": metadata.get(
-                            "source",
-                            "unknown",
-                        ),
-                        "page": metadata.get(
-                            "page",
-                            1,
-                        ),
-                        "chunk": metadata.get(
-                            "chunk",
-                            0,
-                        ),
-                        "document_id": result_document_id,
-                        "score": max(
-                            0.0,
-                            1 - float(distance),
-                        ),
-                    }
-                )
-
-        # =====================================================
-        # BM25 SEARCH
-        # =====================================================
-
-        keyword_items = []
-
-        if self.bm25 and self.bm25_docs:
-
-            # -------------------------------------------------
-            # Select documents
-            # -------------------------------------------------
-
-            if document_id:
-
-                candidate_indices = [
-                    index
-                    for index, doc in enumerate(
-                        self.bm25_docs
-                    )
-                    if doc["document_id"] == document_id
-                ]
-
+        if target_ids:
+            if len(target_ids) == 1:
+                query_kwargs["where"] = {"document_id": target_ids[0]}
             else:
+                query_kwargs["where"] = {"document_id": {"$in": target_ids}}
 
-                candidate_indices = list(
-                    range(
-                        len(
-                            self.bm25_docs
-                        )
-                    )
-                )
+        try:
+            semantic_results = self.collection.query(**query_kwargs)
+        except Exception:
+            semantic_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+        semantic_ranked = []
+        docs_list = semantic_results.get("documents", [[]])[0]
+        meta_list = semantic_results.get("metadatas", [[]])[0]
+        dist_list = semantic_results.get("distances", [[]])[0]
+
+        for doc, meta, dist in zip(docs_list, meta_list, dist_list):
+            meta = meta or {}
+            cosine_sim = max(0.0, 1.0 - float(dist))
+            semantic_ranked.append({
+                "text": doc,
+                "source": meta.get("source", "unknown"),
+                "page": int(meta.get("page", 1)),
+                "chunk": int(meta.get("chunk", 0)),
+                "document_id": meta.get("document_id", "unknown"),
+                "dense_score": cosine_sim,
+            })
+
+        # 2. Sparse Keyword Search (BM25)
+        bm25_ranked = []
+        if self.bm25 and self.bm25_docs:
+            if target_ids:
+                candidate_indices = [
+                    idx for idx, d in enumerate(self.bm25_docs)
+                    if d["document_id"] in target_ids
+                ]
+            else:
+                candidate_indices = list(range(len(self.bm25_docs)))
 
             if candidate_indices:
+                tokens = query.lower().split()
+                scores = self.bm25.get_scores(tokens)
 
-                query_tokens = (
-                    query.lower().split()
-                )
+                filtered_scored = [(idx, scores[idx]) for idx in candidate_indices if scores[idx] > 0]
+                filtered_scored.sort(key=lambda x: x[1], reverse=True)
 
-                all_scores = self.bm25.get_scores(
-                    query_tokens
-                )
+                max_bm25 = filtered_scored[0][1] if filtered_scored else 1.0
+                if max_bm25 <= 0:
+                    max_bm25 = 1.0
 
-                filtered_scores = [
-                    (
-                        index,
-                        all_scores[index],
-                    )
-                    for index in candidate_indices
-                ]
+                for idx, sc in filtered_scored[:candidate_count]:
+                    d = self.bm25_docs[idx]
+                    bm25_ranked.append({
+                        "text": d["text"],
+                        "source": d["source"],
+                        "page": d["page"],
+                        "chunk": d["chunk"],
+                        "document_id": d["document_id"],
+                        "bm25_score": float(sc) / max_bm25,
+                    })
 
-                filtered_scores.sort(
-                    key=lambda item: item[1],
-                    reverse=True,
-                )
+        # 3. Reciprocal Rank Fusion (RRF)
+        rrf_constant = 60
+        rrf_scores: Dict[tuple, Dict[str, Any]] = {}
 
-                top_candidates = filtered_scores[
-                    :top_k
-                ]
+        for rank, item in enumerate(semantic_ranked):
+            key = (item["document_id"], item["source"], item["page"], item["chunk"])
+            rrf_val = 1.0 / (rrf_constant + rank + 1)
+            if key not in rrf_scores:
+                rrf_scores[key] = {
+                    **item,
+                    "rrf_score": rrf_val,
+                    "dense_score": item["dense_score"],
+                    "bm25_score": 0.0,
+                }
+            else:
+                rrf_scores[key]["rrf_score"] += rrf_val
+                rrf_scores[key]["dense_score"] = item["dense_score"]
 
-                max_score = max(
-                    [
-                        score
-                        for _, score in top_candidates
-                    ],
-                    default=1.0,
-                )
+        for rank, item in enumerate(bm25_ranked):
+            key = (item["document_id"], item["source"], item["page"], item["chunk"])
+            rrf_val = 1.0 / (rrf_constant + rank + 1)
+            if key not in rrf_scores:
+                rrf_scores[key] = {
+                    **item,
+                    "rrf_score": rrf_val,
+                    "dense_score": 0.0,
+                    "bm25_score": item["bm25_score"],
+                }
+            else:
+                rrf_scores[key]["rrf_score"] += rrf_val
+                rrf_scores[key]["bm25_score"] = item["bm25_score"]
 
-                if max_score <= 0:
-                    max_score = 1.0
-
-                for index, score in top_candidates:
-
-                    doc = self.bm25_docs[index]
-
-                    keyword_items.append(
-                        {
-                            "text": doc["text"],
-                            "source": doc["source"],
-                            "page": doc["page"],
-                            "chunk": doc["chunk"],
-                            "document_id": doc[
-                                "document_id"
-                            ],
-                            "score": float(
-                                score
-                            ) / max_score,
-                        }
-                    )
-
-        # =====================================================
-        # MERGE SEMANTIC + BM25
-        # =====================================================
-
-        combined = {}
-
-        for result in (
-            semantic_items + keyword_items
-        ):
-
-            # Don't merge identical text from
-            # different documents.
-            key = (
-                result["document_id"],
-                result["source"],
-                result["page"],
-                result["chunk"],
-                result["text"],
+        merged_results = []
+        for key, item in rrf_scores.items():
+            composite_score = (
+                item["dense_score"] * 0.60 +
+                item["bm25_score"] * 0.25 +
+                min(item["rrf_score"] * 30, 0.15)
             )
+            item["score"] = round(float(composite_score), 4)
 
-            if (
-                key not in combined
-                or result["score"]
-                > combined[key]["score"]
-            ):
-                combined[key] = result
+            if item["score"] >= min_relevance_threshold:
+                merged_results.append(item)
 
-        # -----------------------------------------------------
-        # Sort by relevance
-        # -----------------------------------------------------
+        merged_results.sort(key=lambda x: x["score"], reverse=True)
+        return merged_results[:top_k]
 
-        final_results = sorted(
-            combined.values(),
-            key=lambda item: item["score"],
-            reverse=True,
-        )
-
-        return final_results[:top_k]
-
-        # =========================================================
-    # LIST DOCUMENTS
+    # =========================================================
+    # DOCUMENT MANAGEMENT & RETRIEVAL
     # =========================================================
 
-    def list_documents(self):
-        """
-        Return all unique indexed documents.
-        """
+    def list_documents(self) -> List[Dict[str, Any]]:
+        existing = self.collection.get(include=["metadatas"])
+        docs = {}
 
-        existing = self.collection.get(
-            include=["metadatas"]
-        )
-
-        documents = {}
-
-        for metadata in existing.get(
-            "metadatas",
-            []
-        ):
-
-            metadata = metadata or {}
-
-            document_id = metadata.get(
-                "document_id"
-            )
-
-            source = metadata.get(
-                "source",
-                "unknown"
-            )
-
-            if not document_id:
+        for meta in existing.get("metadatas", []):
+            meta = meta or {}
+            doc_id = meta.get("document_id")
+            source = meta.get("source", "unknown")
+            if not doc_id:
                 continue
-
-            if document_id not in documents:
-                documents[document_id] = {
-                    "document_id": document_id,
+            if doc_id not in docs:
+                docs[doc_id] = {
+                    "document_id": doc_id,
                     "filename": source,
+                    "chunks_count": 0,
                 }
+            docs[doc_id]["chunks_count"] += 1
 
-        return list(
-            documents.values()
+        return list(docs.values())
+
+    def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        res = self.collection.get(
+            where={"document_id": document_id},
+            include=["documents", "metadatas"],
         )
+        items = []
+        for doc, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+            meta = meta or {}
+            items.append({
+                "text": doc,
+                "chunk": int(meta.get("chunk", 0)),
+                "page": int(meta.get("page", 1)),
+                "source": meta.get("source", "unknown"),
+            })
+        items.sort(key=lambda x: x["chunk"])
+        return items
+
+    def delete_document(self, document_id: str) -> bool:
+        try:
+            self.collection.delete(where={"document_id": document_id})
+            self.bm25_docs = [
+                d for d in self.bm25_docs
+                if d.get("document_id") != document_id
+            ]
+            self._rebuild_bm25()
+            return True
+        except Exception as e:
+            print(f"Error deleting document {document_id}: {e}")
+            return False
+
+    def clear_all(self):
+        ids = self.collection.get()["ids"]
+        if ids:
+            self.collection.delete(ids=ids)
+        self.bm25_docs = []
+        self.bm25 = None

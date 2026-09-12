@@ -1,28 +1,161 @@
 # app/core/embedder.py
-#
-# CHANGED FROM ORIGINAL: swapped "all-MiniLM-L6-v2" (English-only) for
-# "intfloat/multilingual-e5-base" (100+ languages including Hindi and
-# Gujarati). This is the model that lets a Gujarati question find the
-# right chunk in an English PDF, because it maps meaning - not exact
-# words - into the same vector space across languages.
-#
-# IMPORTANT: e5 models require a "query: " or "passage: " prefix on every
-# piece of text you embed. Skipping this prefix quietly produces WORSE
-# results - it's not optional, it's how the model was trained.
 
-from sentence_transformers import SentenceTransformer
+import os
+import time
+import logging
+from typing import List
+from google import genai
+from app.core.resilience import retry_gemini
+
+logger = logging.getLogger("docmind.embedder")
+
+
+def _extract_batch_embeddings(response) -> List[List[float]]:
+    """Extract list of embedding vectors from EmbedContentResponse."""
+    if hasattr(response, "embeddings") and response.embeddings:
+        vectors = []
+        for e in response.embeddings:
+            if hasattr(e, "values"):
+                vectors.append(list(e.values))
+            else:
+                vectors.append(list(e))
+        return vectors
+    elif hasattr(response, "embedding") and response.embedding:
+        emb = response.embedding
+        if hasattr(emb, "values"):
+            return [list(emb.values)]
+        return [list(emb)]
+    raise ValueError("Could not extract embeddings from response.")
+
+
+def _extract_embedding_values(response) -> List[float]:
+    """
+    Extract the list of float values from the response.
+    In google-genai SDK, the attribute is response.embeddings (list of ContentEmbedding).
+    """
+    if hasattr(response, "embeddings") and response.embeddings:
+        first = response.embeddings[0]
+        if hasattr(first, "values"):
+            return list(first.values)
+        return list(first)
+    elif hasattr(response, "embedding") and response.embedding:
+        emb = response.embedding
+        if hasattr(emb, "values"):
+            return list(emb.values)
+        return list(emb)
+    raise ValueError("Could not extract embedding values from Gemini EmbedContentResponse.")
 
 
 class Embedder:
-    def __init__(self, model_name: str = "intfloat/multilingual-e5-base"):
-        self.model = SentenceTransformer(model_name)
+    """
+    Generates dense vector embeddings using Google Gemini's active embedding models
+    with automatic candidate fallback and 429/503 retry resilience.
+    """
 
-    def embed_passages(self, texts: list[str]) -> list[list[float]]:
-        """Use this when embedding DOCUMENT CHUNKS (at upload/indexing time)."""
-        prefixed = [f"passage: {t}" for t in texts]
-        return self.model.encode(prefixed, show_progress_bar=False, normalize_embeddings=True).tolist()
+    def __init__(self, model_name: str | None = None):
+        self._client = None
+        custom_model = model_name or os.getenv("GEMINI_EMBEDDING_MODEL")
+        self.candidate_models = [
+            m for m in [
+                custom_model,
+                "gemini-embedding-001",
+                "gemini-embedding-2",
+                "text-embedding-004",
+            ] if m
+        ]
+        self.active_model = self.candidate_models[0]
 
-    def embed_query(self, text: str) -> list[float]:
-        """Use this when embedding a USER QUESTION (at search time)."""
-        prefixed = f"query: {text}"
-        return self.model.encode([prefixed], normalize_embeddings=True).tolist()[0]
+    @property
+    def client(self):
+        if self._client is None:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "GEMINI_API_KEY is not set. Please add your Gemini API key to .env file."
+                )
+            api_key = api_key.strip("'\"")
+            self._client = genai.Client(api_key=api_key)
+        return self._client
+
+    def _embed_single(self, text: str) -> List[float]:
+        last_error = None
+
+        ordered_models = [self.active_model] + [
+            m for m in self.candidate_models if m != self.active_model
+        ]
+
+        for model in ordered_models:
+            try:
+                response = self.client.models.embed_content(
+                    model=model,
+                    contents=text,
+                )
+                self.active_model = model
+                return _extract_embedding_values(response)
+            except Exception as e:
+                err_str = str(e).lower()
+                last_error = e
+                if "404" in err_str or "not found" in err_str or "not supported" in err_str:
+                    logger.warning(
+                        f"Embedding model '{model}' returned 404. Falling back to next candidate..."
+                    )
+                    continue
+                raise e
+
+        raise last_error
+
+    def _embed_batch(self, batch_texts: List[str]) -> List[List[float]]:
+        last_error = None
+        ordered_models = [self.active_model] + [
+            m for m in self.candidate_models if m != self.active_model
+        ]
+
+        for model in ordered_models:
+            try:
+                response = self.client.models.embed_content(
+                    model=model,
+                    contents=batch_texts,
+                )
+                self.active_model = model
+                return _extract_batch_embeddings(response)
+            except Exception as e:
+                err_str = str(e).lower()
+                last_error = e
+                if "404" in err_str or "not found" in err_str or "not supported" in err_str:
+                    logger.warning(
+                        f"Embedding model '{model}' returned 404. Falling back to next candidate..."
+                    )
+                    continue
+                raise e
+
+        raise last_error
+
+    @retry_gemini(max_retries=4, initial_delay=2.0)
+    def embed_passages(self, texts: List[str], batch_size: int = 15) -> List[List[float]]:
+        if not texts:
+            return []
+
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch = [t.strip() or "empty" for t in texts[i : i + batch_size]]
+            try:
+                # 1. Native batch embedding: embeds up to 15 passages in a single API call
+                batch_vectors = self._embed_batch(batch)
+                all_embeddings.extend(batch_vectors)
+            except Exception as e:
+                logger.warning(
+                    f"Native batch embed failed ({e}). Falling back to sequential embedding for batch..."
+                )
+                for text in batch:
+                    all_embeddings.append(self._embed_single(text))
+
+            # Gentle 1s pacing between batches to stay comfortably below 15 RPM
+            if i + batch_size < len(texts):
+                time.sleep(1.0)
+
+        return all_embeddings
+
+    @retry_gemini(max_retries=4, initial_delay=1.0)
+    def embed_query(self, text: str) -> List[float]:
+        clean_text = text.strip() or "query"
+        return self._embed_single(clean_text)
