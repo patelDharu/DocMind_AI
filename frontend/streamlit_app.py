@@ -43,59 +43,173 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
-    /* Full-screen natural conversation flow (matching Image 3 ChatGPT) */
+    /* Sidebar history rows: keep title and delete icon strictly side-by-side */
+    div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 4px !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
+        flex: 0 0 34px !important;
+        min-width: 34px !important;
+        max-width: 34px !important;
+    }
+
+    /* Sidebar delete chat button styling */
+    div[data-testid="stSidebar"] div[data-testid="column"]:last-child button {
+        padding: 0px !important;
+        width: 32px !important;
+        min-width: 32px !important;
+        max-width: 32px !important;
+        height: 36px !important;
+        border-radius: 8px !important;
+        border: 1px solid #fee2e2 !important;
+        background-color: #fff1f2 !important;
+        color: #ef4444 !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        line-height: 1 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: all 0.15s ease !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="column"]:last-child button:hover {
+        background-color: #fecaca !important;
+        border-color: #ef4444 !important;
+        color: #b91c1c !important;
+        transform: scale(1.05) !important;
+    }
+
+    /* Full-screen natural conversation flow */
     div[data-testid="stChatMessage"] {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
+        padding-top: 0.85rem !important;
+        padding-bottom: 0.85rem !important;
         margin-bottom: 0.75rem !important;
     }
 
-    /* Fixed floating bottom search bar container (ChatGPT style) */
+    /* Fixed floating bottom search bar container */
     div[data-testid="stBottom"] {
         display: block !important;
         background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.95) 30%, #ffffff 100%) !important;
-        padding-top: 14px !important;
-        padding-bottom: 10px !important;
+        padding-top: 10px !important;
+        padding-bottom: 8px !important;
         z-index: 9999 !important;
     }
 
     div[data-testid="stCustomComponentV1"]:has(iframe[title*="chat_bar"]) {
-        min-height: 68px !important;
+        min-height: 64px !important;
     }
 
-    div[data-testid="stBottomBlockContainer"] {
-        max-width: 95% !important;
-        width: 95% !important;
-        margin: 0 auto !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
-
-    /* Full-width spacious layout covering extra side space nicely without clipping */
-    .block-container {
-        padding-top: 4.5rem !important;
-        padding-bottom: 7.5rem !important;
-        max-width: 95% !important;
-        width: 95% !important;
-        margin: 0 auto !important;
-    }
-
-    /* Clean styling for main navigation tabs without side clipping */
+    /* Responsive Main Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 6px;
         padding-top: 4px;
         padding-bottom: 6px;
         overflow-x: auto;
         white-space: nowrap;
         flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
     }
     .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
-        font-size: 14px;
+        padding: 7px 14px;
+        font-size: 13.5px;
         font-weight: 500;
         border-radius: 6px;
         white-space: nowrap;
         flex-shrink: 0;
+    }
+
+    /* Desktop & Laptop (> 1024px) */
+    @media (min-width: 1025px) {
+        .block-container {
+            padding-top: 4.5rem !important;
+            padding-bottom: 7.5rem !important;
+            max-width: 94% !important;
+            width: 94% !important;
+            margin: 0 auto !important;
+        }
+        div[data-testid="stBottomBlockContainer"] {
+            max-width: 94% !important;
+            width: 94% !important;
+            margin: 0 auto !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+    }
+
+    /* Tablet (601px - 1024px) */
+    @media (min-width: 601px) and (max-width: 1024px) {
+        .block-container {
+            padding-top: 3.8rem !important;
+            padding-bottom: 7rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            max-width: 98% !important;
+            width: 98% !important;
+        }
+        div[data-testid="stBottomBlockContainer"] {
+            max-width: 98% !important;
+            width: 98% !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 6px 11px !important;
+            font-size: 12.5px !important;
+        }
+        div[data-testid="stChatMessage"] {
+            padding: 0.75rem 0.85rem !important;
+        }
+    }
+
+    /* Mobile Phone (<= 600px) */
+    @media (max-width: 600px) {
+        .block-container {
+            padding-top: 3.2rem !important;
+            padding-bottom: 6.5rem !important;
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+        div[data-testid="stBottom"] {
+            padding-top: 4px !important;
+            padding-bottom: 4px !important;
+        }
+        div[data-testid="stBottomBlockContainer"] {
+            max-width: 100% !important;
+            width: 100% !important;
+            padding-left: 2px !important;
+            padding-right: 2px !important;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 4px !important;
+            padding-top: 2px !important;
+            padding-bottom: 4px !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 5px 8px !important;
+            font-size: 11.5px !important;
+            border-radius: 5px !important;
+        }
+        div[data-testid="stChatMessage"] {
+            padding: 0.5rem 0.6rem !important;
+            margin-bottom: 0.5rem !important;
+            font-size: 13.5px !important;
+        }
+        div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+        }
+        div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+            margin-bottom: 0.5rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -177,7 +291,31 @@ def start_new_chat():
     save_current_chat_session()
     st.session_state.current_session_id = str(uuid.uuid4())[:8]
     st.session_state.messages = []
+    st.session_state.active_doc_id = None
+    st.session_state.selected_document_ids = []
     st.session_state.audio_cache = {}
+    st.session_state.last_chat_bar_msg_id = None
+
+
+def clear_current_chat():
+    """Completely clear current chat messages, active document targeting, and reset state."""
+    st.session_state.messages = []
+    st.session_state.active_doc_id = None
+    st.session_state.selected_document_ids = []
+    st.session_state.audio_cache = {}
+    st.session_state.last_chat_bar_msg_id = None
+    sess_id = st.session_state.get("current_session_id")
+    if sess_id:
+        sessions = load_chat_sessions()
+        for s in sessions:
+            if s.get("id") == sess_id:
+                s["messages"] = []
+                s["active_doc_id"] = None
+                s["selected_document_ids"] = []
+                s["title"] = "New Conversation"
+                s["updated_at"] = datetime.now().strftime("%d %b, %H:%M")
+                break
+        save_chat_sessions(sessions)
 
 
 def switch_to_chat_session(session_id: str):
@@ -191,6 +329,7 @@ def switch_to_chat_session(session_id: str):
         st.session_state.selected_document_ids = target.get("selected_document_ids", [])
         st.session_state.active_doc_id = target.get("active_doc_id")
         st.session_state.audio_cache = {}
+        st.session_state.last_chat_bar_msg_id = None
 
 
 def delete_chat_session(session_id: str):
@@ -364,7 +503,7 @@ if saved_sessions:
                     switch_to_chat_session(s_id)
                     st.rerun()
             with c_hist2:
-                if st.button("🗑️", key=f"del_btn_{s_id}", help="Delete this chat"):
+                if st.button("✕", key=f"del_btn_{s_id}", help="Delete this chat"):
                     delete_chat_session(s_id)
                     st.rerun()
 
@@ -428,7 +567,7 @@ else:
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
-    st.session_state.messages = []
+    clear_current_chat()
     st.rerun()
 
 
@@ -450,43 +589,43 @@ tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
 # =========================================================
 
 with tab_chat:
-    if st.session_state.selected_document_ids and len(st.session_state.selected_document_ids) == 1:
-        cur_d_id = st.session_state.selected_document_ids[0]
-        target_name = next(
-            (d["filename"] for d in documents if d["document_id"] == cur_d_id),
-            "Selected Document"
-        )
-        active_alert = st.session_state.get("doc_action_alerts", {}).get(cur_d_id)
-        if active_alert:
-            req_act = active_alert.get("requires_action", False)
-            d_line = active_alert.get("deadline")
-            if req_act:
-                badge = "⚠️ Action Required" + (f" (Due: {d_line})" if d_line and str(d_line).lower() not in ["null", "none", ""] else "")
-                st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#dc2626; font-weight:600;'>{badge}</span>", unsafe_allow_html=True)
+    # Only show active document banner when conversation has messages and document(s) are actively targeted
+    if st.session_state.messages and st.session_state.selected_document_ids:
+        if len(st.session_state.selected_document_ids) == 1:
+            cur_d_id = st.session_state.selected_document_ids[0]
+            target_name = next(
+                (d["filename"] for d in documents if d["document_id"] == cur_d_id),
+                "Selected Document"
+            )
+            active_alert = st.session_state.get("doc_action_alerts", {}).get(cur_d_id)
+            if active_alert:
+                req_act = active_alert.get("requires_action", False)
+                d_line = active_alert.get("deadline")
+                if req_act:
+                    badge = "⚠️ Action Required" + (f" (Due: {d_line})" if d_line and str(d_line).lower() not in ["null", "none", ""] else "")
+                    st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#dc2626; font-weight:600;'>{badge}</span>", unsafe_allow_html=True)
+                else:
+                    st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#16a34a; font-weight:600;'>✅ Informational Document (No Action Needed)</span>", unsafe_allow_html=True)
             else:
-                st.caption(f"🎯 Actively querying: **{target_name}** &nbsp;·&nbsp; <span style='color:#16a34a; font-weight:600;'>✅ Informational Document (No Action Needed)</span>", unsafe_allow_html=True)
-        else:
-            st.caption(f"🎯 Actively querying: **{target_name}**")
-    elif len(st.session_state.selected_document_ids) > 1:
-        st.caption(f"🎯 Actively querying **{len(st.session_state.selected_document_ids)}** selected documents.")
-    else:
-        st.caption("🌐 Querying across all uploaded documents.")
+                st.caption(f"🎯 Actively querying: **{target_name}**")
+        elif len(st.session_state.selected_document_ids) > 1:
+            st.caption(f"🎯 Actively querying **{len(st.session_state.selected_document_ids)}** selected documents.")
 
     # -------------------------------------------------------------
     # ChatGPT-Style Full-Height Natural Conversation Feed
     # -------------------------------------------------------------
     if not st.session_state.messages:
         st.markdown("""
-        <div style="text-align: center; padding: 60px 20px 30px 20px; color: #64748b;">
-            <div style="font-size: 44px; margin-bottom: 12px;">📄</div>
-            <h3 style="color: #1e293b; margin-bottom: 8px; font-weight: 700; font-size: 24px;">DocMind AI Workspace</h3>
-            <p style="font-size: 15px; max-width: 600px; margin: 0 auto 24px auto; color: #64748b; line-height: 1.6;">
-                Upload contracts, reports, tax notices, or medical records. Ask questions, compare documents, or get proactive deadline and action alerts.
+        <div style="text-align: center; padding: 40px 16px 20px 16px; color: #64748b;">
+            <div style="font-size: 38px; margin-bottom: 10px;">📄</div>
+            <h3 style="color: #1e293b; margin-bottom: 8px; font-weight: 700; font-size: 22px;">DocMind AI Workspace</h3>
+            <p style="font-size: 14.5px; max-width: 580px; margin: 0 auto 20px auto; color: #64748b; line-height: 1.5;">
+                Upload contracts, reports, tax notices, or spreadsheets. Ask questions, compare documents, or get proactive deadline and action alerts.
             </p>
-            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
-                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">📎 Click <strong>(+)</strong> to Upload & Index</span>
-                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">⚡ Proactive Action & Deadline Alerts</span>
-                <span style="background: #f1f5f9; color: #334155; padding: 7px 16px; border-radius: 20px; font-size: 13.5px; font-weight: 500;">🎙️ Trilingual English / हिन्दी / ગુજરાતી</span>
+            <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+                <span style="background: #f1f5f9; color: #334155; padding: 6px 14px; border-radius: 20px; font-size: 12.5px; font-weight: 500;">📎 Click <strong>(+)</strong> to Upload & Index</span>
+                <span style="background: #f1f5f9; color: #334155; padding: 6px 14px; border-radius: 20px; font-size: 12.5px; font-weight: 500;">⚡ Proactive Action & Deadline Alerts</span>
+                <span style="background: #f1f5f9; color: #334155; padding: 6px 14px; border-radius: 20px; font-size: 12.5px; font-weight: 500;">🎙️ Trilingual English / हिन्दी / ગુજરાતી</span>
             </div>
         </div>
         """, unsafe_allow_html=True)

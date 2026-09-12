@@ -268,6 +268,102 @@ html, body {
     cursor: not-allowed;
     box-shadow: none;
 }
+
+/* Responsive Styles for Tablet & Mobile */
+@media (max-width: 600px) {
+    .component-container {
+        padding: 2px 2px 2px 2px;
+    }
+    .searchbar-capsule {
+        padding: 3px 5px 3px 8px;
+        min-height: 46px;
+        border-radius: 24px;
+    }
+    .plus-btn {
+        width: 30px;
+        height: 30px;
+        margin-right: 4px;
+    }
+    .plus-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+    .attachment-chip {
+        max-width: 120px;
+        padding: 2px 6px;
+        font-size: 11px;
+        margin-right: 4px;
+        gap: 4px;
+    }
+    .chip-filename {
+        max-width: 65px;
+    }
+    .chip-filesize {
+        display: none;
+    }
+    .chat-input {
+        font-size: 13.5px;
+        padding: 5px 2px;
+    }
+    .chat-input::placeholder {
+        font-size: 12px;
+    }
+    .actions-right {
+        gap: 3px;
+        margin-left: 2px;
+    }
+    .mic-btn {
+        width: 32px;
+        height: 32px;
+    }
+    .mic-btn svg {
+        width: 17px;
+        height: 17px;
+    }
+    .send-btn {
+        width: 32px;
+        height: 32px;
+    }
+    .send-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+    .chatgpt-menu {
+        width: 270px;
+        padding: 4px;
+        border-radius: 12px;
+    }
+    .menu-item {
+        padding: 8px 10px;
+        gap: 8px;
+    }
+    .menu-icon {
+        width: 30px;
+        height: 30px;
+    }
+    .menu-title {
+        font-size: 13px;
+    }
+    .menu-desc {
+        font-size: 11px;
+    }
+}
+
+@media (min-width: 601px) and (max-width: 1024px) {
+    .searchbar-capsule {
+        padding: 4px 7px 4px 10px;
+        min-height: 48px;
+    }
+    .chat-input {
+        font-size: 14px;
+    }
+    .chat-input::placeholder {
+        font-size: 13px;
+    }
+    .attachment-chip {
+        max-width: 180px;
+    }
+}
 </style>
 </head>
 <body>
@@ -375,7 +471,20 @@ window.parent.postMessage({
 }, "*");
 
 setFrameHeight(68);
-window.addEventListener("resize", () => setFrameHeight());
+
+function updatePlaceholder() {
+    if (!attachedFile && chatInput) {
+        if (window.innerWidth <= 600) {
+            chatInput.placeholder = "Ask in English, हिन्दी, ગુજરાતી...";
+        } else {
+            chatInput.placeholder = "Ask a question in English, हिन्दी, or ગુજરાતી...";
+        }
+    }
+}
+window.addEventListener("resize", () => {
+    setFrameHeight();
+    updatePlaceholder();
+});
 
 const plusBtn = document.getElementById("plusBtn");
 const menuWrapper = document.getElementById("menuWrapper");
@@ -452,7 +561,7 @@ function clearAttachment() {
     attachedFile = null;
     hiddenFileInput.value = "";
     attachmentChip.style.display = "none";
-    chatInput.placeholder = "Ask a question in English, हिन्दी, or ગુજરાતી...";
+    updatePlaceholder();
     updateSendState();
 }
 
@@ -556,9 +665,7 @@ if (SpeechRecognition) {
 function stopSpeech() {
     isRecording = false;
     micBtn.classList.remove("recording");
-    if (!attachedFile) {
-        chatInput.placeholder = "Ask a question in English, हिन्दी, or ગુજરાતી...";
-    }
+    updatePlaceholder();
     if (recognition) {
         try { recognition.stop(); } catch(e) {}
     }
