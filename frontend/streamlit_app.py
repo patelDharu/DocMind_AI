@@ -454,74 +454,43 @@ def format_action_alert_markdown(alert: dict) -> str:
         items_html = ""
         if items and isinstance(items, list):
             items_li = "".join([f"<li style='margin-bottom: 5px;'>{it}</li>" for it in items if it])
-            items_html = f"""
-            <div style="margin-top: 10px; font-weight: 600; color: #1e293b; font-size: 14px;">📋 What You Need To Do:</div>
-            <ul style="margin: 4px 0 10px 20px; padding: 0; color: #334155; font-size: 13.5px; line-height: 1.5;">
-                {items_li}
-            </ul>
-            """
+            items_html = f"<div style='margin-top: 10px; font-weight: 600; color: #1e293b; font-size: 14px;'>📋 What You Need To Do:</div><ul style='margin: 4px 0 10px 20px; padding: 0; color: #334155; font-size: 13.5px; line-height: 1.5;'>{items_li}</ul>"
 
         deadline_html = ""
         if deadline and str(deadline).lower() not in ["null", "none", ""]:
-            deadline_html = f"""
-            <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #991b1b; font-weight: 600; font-size: 14px;">
-                📅 <strong>Deadline / Due Date</strong>: {deadline}
-            </div>
-            """
+            deadline_html = f"<div style='background: #fee2e2; border-left: 4px solid #ef4444; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #991b1b; font-weight: 600; font-size: 14px;'>📅 <strong>Deadline / Due Date</strong>: {deadline}</div>"
 
         consequences_html = ""
         if consequences and str(consequences).lower() not in ["null", "none", ""]:
-            consequences_html = f"""
-            <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #92400e; font-size: 13.5px; line-height: 1.45;">
-                ⚠️ <strong>Consequences If Missed</strong>: {consequences}
-            </div>
-            """
+            consequences_html = f"<div style='background: #fffbeb; border-left: 4px solid #f59e0b; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #92400e; font-size: 13.5px; line-height: 1.45;'>⚠️ <strong>Consequences If Missed</strong>: {consequences}</div>"
 
-        card_html = f"""
-<div style="background: #ffffff; border: 1.5px solid {urgency_border}; border-left: 6px solid {urgency_color}; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
-        <span style="background: {urgency_bg}; color: {urgency_color}; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid {urgency_border};">
-            {urgency_text}
-        </span>
-        <span style="color: #64748b; font-size: 13px; font-weight: 500;">
-            📋 Document Classification: <strong style="color: #334155;">{doc_type}</strong>
-        </span>
-    </div>
-    <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
-        ⚠️ Proactive Alert: Action Required
-    </div>
-    <div style="font-size: 14px; color: #334155; line-height: 1.6;">
-        <strong>🎯 Action Summary</strong>: {summary}
-    </div>
-    {deadline_html}
-    {items_html}
-    {consequences_html}
-</div>
-"""
-        return card_html.strip()
+        card_html = (
+            f"<div style='background: #ffffff; border: 1.5px solid {urgency_border}; border-left: 6px solid {urgency_color}; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
+            f"<div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;'>"
+            f"<span style='background: {urgency_bg}; color: {urgency_color}; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid {urgency_border};'>{urgency_text}</span>"
+            f"<span style='color: #64748b; font-size: 13px; font-weight: 500;'>📋 Document Classification: <strong style='color: #334155;'>{doc_type}</strong></span>"
+            f"</div>"
+            f"<div style='font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;'>⚠️ Proactive Alert: Action Required</div>"
+            f"<div style='font-size: 14px; color: #334155; line-height: 1.6;'><strong>🎯 Action Summary</strong>: {summary}</div>"
+            f"{deadline_html}"
+            f"{items_html}"
+            f"{consequences_html}"
+            f"</div>"
+        )
+        return card_html
     else:
-        card_html = f"""
-<div style="background: #ffffff; border: 1.5px solid #bbf7d0; border-left: 6px solid #16a34a; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
-        <span style="background: #f0fdf4; color: #15803d; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid #bbf7d0;">
-            ✅ INFORMATIONAL DOCUMENT (NO ACTION NEEDED)
-        </span>
-        <span style="color: #64748b; font-size: 13px; font-weight: 500;">
-            📋 Document Classification: <strong style="color: #334155;">{doc_type}</strong>
-        </span>
-    </div>
-    <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
-        ℹ️ Proactive Alert: Informational Status
-    </div>
-    <div style="font-size: 14px; color: #334155; line-height: 1.6;">
-        {summary}
-    </div>
-    <div style="font-size: 12.5px; color: #64748b; margin-top: 6px; font-style: italic;">
-        *This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*
-    </div>
-</div>
-"""
-        return card_html.strip()
+        card_html = (
+            f"<div style='background: #ffffff; border: 1.5px solid #bbf7d0; border-left: 6px solid #16a34a; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
+            f"<div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;'>"
+            f"<span style='background: #f0fdf4; color: #15803d; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid #bbf7d0;'>✅ INFORMATIONAL DOCUMENT (NO ACTION NEEDED)</span>"
+            f"<span style='color: #64748b; font-size: 13px; font-weight: 500;'>📋 Document Classification: <strong style='color: #334155;'>{doc_type}</strong></span>"
+            f"</div>"
+            f"<div style='font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;'>ℹ️ Proactive Alert: Informational Status</div>"
+            f"<div style='font-size: 14px; color: #334155; line-height: 1.6;'>{summary}</div>"
+            f"<div style='font-size: 12.5px; color: #64748b; margin-top: 6px; font-style: italic;'>*This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*</div>"
+            f"</div>"
+        )
+        return card_html
 
 
 def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str | None:
