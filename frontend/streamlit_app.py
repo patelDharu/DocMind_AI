@@ -85,11 +85,32 @@ st.markdown("""
         transform: scale(1.05) !important;
     }
 
-    /* Full-screen natural conversation flow */
+    /* Remove Streamlit fixed white header blur/mask so text is never covered from above */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        background-color: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        box-shadow: none !important;
+        border: none !important;
+        height: 2.2rem !important;
+        z-index: 50 !important;
+    }
+
+    /* Modern clean message card styling */
     div[data-testid="stChatMessage"] {
-        padding-top: 0.85rem !important;
-        padding-bottom: 0.85rem !important;
-        margin-bottom: 0.75rem !important;
+        background-color: #f8fafc !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 14px !important;
+        padding: 1.1rem 1.3rem !important;
+        margin-bottom: 0.9rem !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03) !important;
+        color: #0f172a !important;
+    }
+    div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) {
+        background-color: #eff6ff !important;
+        border-color: #bfdbfe !important;
+        color: #1e3a8a !important;
     }
 
     /* Fixed floating bottom search bar container */
@@ -105,11 +126,16 @@ st.markdown("""
         min-height: 64px !important;
     }
 
-    /* Responsive Main Navigation Tabs */
+    /* Sticky Navigation Tabs acting as clean navbar without covering content */
     .stTabs [data-baseweb="tab-list"] {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 100 !important;
+        background: #ffffff !important;
+        border-bottom: 1.5px solid #e2e8f0 !important;
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
         gap: 6px;
-        padding-top: 4px;
-        padding-bottom: 6px;
         overflow-x: auto;
         white-space: nowrap;
         flex-wrap: nowrap;
@@ -386,19 +412,28 @@ def delete_document(doc_id: str):
         return False
 
 
-def synthesize_audio_api(text: str, lang: str = "en"):
+def synthesize_audio_api(text: str, lang: str = "en") -> bytes | None:
     try:
-        res = requests.post(f"{API_URL}/speak", params={"text": text, "language": lang}, timeout=30)
+        payload = {"text": text[:1500], "language": lang}
+        res = requests.post(f"{API_URL}/speak", json=payload, timeout=30)
         if res.ok:
             data = res.json()
-            return f"{API_URL}/audio/{data['filename']}"
-    except Exception:
-        pass
+            fname = data.get("filename")
+            # 1. Try reading directly from local output directory on server
+            local_p = Path("app/data/audio_out") / fname
+            if local_p.exists():
+                return local_p.read_bytes()
+            # 2. Or fetch audio bytes via container internal API call
+            aud_res = requests.get(f"{API_URL}/audio/{fname}", timeout=20)
+            if aud_res.ok:
+                return aud_res.content
+    except Exception as e:
+        print(f"Audio synth error: {e}")
     return None
 
 
 def format_action_alert_markdown(alert: dict) -> str:
-    """Formats proactive action & deadline alert into a beautiful markdown callout card."""
+    """Formats proactive action & deadline alert into a modern, high-contrast, structured card."""
     if not alert:
         return ""
 
@@ -411,36 +446,82 @@ def format_action_alert_markdown(alert: dict) -> str:
     consequences = alert.get("consequences")
 
     if requires_action:
-        urgency_labels = {
-            "high": "🔴 **HIGH URGENCY — ACTION REQUIRED**",
-            "medium": "🟡 **MEDIUM URGENCY — ACTION REQUIRED**",
-            "low": "🔵 **LOW URGENCY — ACTION RECOMMENDED**",
-        }
-        badge = urgency_labels.get(urgency, "⚠️ **ACTION REQUIRED**")
+        urgency_color = "#dc2626" if urgency == "high" else ("#d97706" if urgency == "medium" else "#2563eb")
+        urgency_bg = "#fef2f2" if urgency == "high" else ("#fffbeb" if urgency == "medium" else "#eff6ff")
+        urgency_border = "#fca5a5" if urgency == "high" else ("#fde68a" if urgency == "medium" else "#bfdbfe")
+        urgency_text = "🔴 HIGH URGENCY — ACTION REQUIRED" if urgency == "high" else ("🟡 MEDIUM URGENCY — ACTION REQUIRED" if urgency == "medium" else "🔵 LOW URGENCY — ACTION RECOMMENDED")
 
-        lines = [
-            f"> ### ⚠️ Proactive Alert: Action Required",
-            f"> {badge} &nbsp;|&nbsp; 📋 *Classification: {doc_type}*",
-            f"> ",
-            f"> 🎯 **Action Summary**: {summary}",
-        ]
-        if deadline and str(deadline).lower() not in ["null", "none", ""]:
-            lines.append(f"> 📅 **Deadline / Due Date**: **{deadline}**")
+        items_html = ""
         if items and isinstance(items, list):
-            lines.append(f"> 📋 **What You Need To Do**:\n" + "\n".join([f">   - {it}" for it in items if it]))
-        if consequences and str(consequences).lower() not in ["null", "none", ""]:
-            lines.append(f"> ⚠️ **Consequences If Missed**: {consequences}")
+            items_li = "".join([f"<li style='margin-bottom: 5px;'>{it}</li>" for it in items if it])
+            items_html = f"""
+            <div style="margin-top: 10px; font-weight: 600; color: #1e293b; font-size: 14px;">📋 What You Need To Do:</div>
+            <ul style="margin: 4px 0 10px 20px; padding: 0; color: #334155; font-size: 13.5px; line-height: 1.5;">
+                {items_li}
+            </ul>
+            """
 
-        return "\n".join(lines)
+        deadline_html = ""
+        if deadline and str(deadline).lower() not in ["null", "none", ""]:
+            deadline_html = f"""
+            <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #991b1b; font-weight: 600; font-size: 14px;">
+                📅 <strong>Deadline / Due Date</strong>: {deadline}
+            </div>
+            """
+
+        consequences_html = ""
+        if consequences and str(consequences).lower() not in ["null", "none", ""]:
+            consequences_html = f"""
+            <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #92400e; font-size: 13.5px; line-height: 1.45;">
+                ⚠️ <strong>Consequences If Missed</strong>: {consequences}
+            </div>
+            """
+
+        card_html = f"""
+<div style="background: #ffffff; border: 1.5px solid {urgency_border}; border-left: 6px solid {urgency_color}; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+        <span style="background: {urgency_bg}; color: {urgency_color}; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid {urgency_border};">
+            {urgency_text}
+        </span>
+        <span style="color: #64748b; font-size: 13px; font-weight: 500;">
+            📋 Document Classification: <strong style="color: #334155;">{doc_type}</strong>
+        </span>
+    </div>
+    <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
+        ⚠️ Proactive Alert: Action Required
+    </div>
+    <div style="font-size: 14px; color: #334155; line-height: 1.6;">
+        <strong>🎯 Action Summary</strong>: {summary}
+    </div>
+    {deadline_html}
+    {items_html}
+    {consequences_html}
+</div>
+"""
+        return card_html.strip()
     else:
-        lines = [
-            f"> ### ✅ Proactive Alert: No Action Needed",
-            f"> 🟢 **INFORMATIONAL DOCUMENT** &nbsp;|&nbsp; 📋 *Classification: {doc_type}*",
-            f"> ",
-            f"> ℹ️ **Status**: {summary}",
-            f"> *This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*",
-        ]
-        return "\n".join(lines)
+        card_html = f"""
+<div style="background: #ffffff; border: 1.5px solid #bbf7d0; border-left: 6px solid #16a34a; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+        <span style="background: #f0fdf4; color: #15803d; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid #bbf7d0;">
+            ✅ INFORMATIONAL DOCUMENT (NO ACTION NEEDED)
+        </span>
+        <span style="color: #64748b; font-size: 13px; font-weight: 500;">
+            📋 Document Classification: <strong style="color: #334155;">{doc_type}</strong>
+        </span>
+    </div>
+    <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
+        ℹ️ Proactive Alert: Informational Status
+    </div>
+    <div style="font-size: 14px; color: #334155; line-height: 1.6;">
+        {summary}
+    </div>
+    <div style="font-size: 12.5px; color: #64748b; margin-top: 6px; font-style: italic;">
+        *This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*
+    </div>
+</div>
+"""
+        return card_html.strip()
 
 
 def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str | None:
@@ -632,7 +713,7 @@ with tab_chat:
     else:
         for idx, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+                st.markdown(msg["content"], unsafe_allow_html=True)
 
                 if msg["role"] == "assistant":
                     col_m1, col_m2 = st.columns([4, 1])
@@ -651,12 +732,12 @@ with tab_chat:
                     with col_m2:
                         # 🔊 Speaker / Listen Button (ChatGPT-Style Audio Playback)
                         if st.button("🔊 Listen", key=f"speak_btn_{idx}", help="Play answer audio"):
-                            audio_url = msg.get("audio_url")
-                            if not audio_url:
-                                audio_url = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
-                                msg["audio_url"] = audio_url
-                            if audio_url:
-                                st.session_state.audio_cache[idx] = audio_url
+                            audio_data = msg.get("audio_bytes")
+                            if not audio_data:
+                                audio_data = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
+                                msg["audio_bytes"] = audio_data
+                            if audio_data:
+                                st.session_state.audio_cache[idx] = audio_data
 
                     if idx in st.session_state.audio_cache:
                         st.audio(st.session_state.audio_cache[idx], format="audio/mp3")
@@ -696,10 +777,10 @@ with tab_chat:
 
                             with ca2:
                                 if st.button("🔊 Listen to Alert", key=f"listen_alert_btn_{idx}", help="Read alert aloud in selected language"):
-                                    speak_text = alert_info.get("alert_markdown") or alert_info.get("action_summary", "")
-                                    aud_url = synthesize_audio_api(speak_text, alert_info.get("language", "en"))
-                                    if aud_url:
-                                        st.session_state.audio_cache[f"alert_audio_{idx}"] = aud_url
+                                    speak_text = alert_info.get("action_summary", "") or alert_info.get("alert_markdown", "")
+                                    aud_bytes = synthesize_audio_api(speak_text, alert_info.get("language", "en"))
+                                    if aud_bytes:
+                                        st.session_state.audio_cache[f"alert_audio_{idx}"] = aud_bytes
 
                             if f"alert_audio_{idx}" in st.session_state.audio_cache:
                                 st.audio(st.session_state.audio_cache[f"alert_audio_{idx}"], format="audio/mp3")
@@ -890,10 +971,23 @@ with tab_chat:
                                 "content": f"🎤 {user_text}",
                             })
 
-                            audio_url = None
+                            audio_bytes = None
                             if result.get("audio_reply_path"):
                                 fname = result["audio_reply_path"].replace("\\", "/").split("/")[-1]
-                                audio_url = f"{API_URL}/audio/{fname}"
+                                local_p = Path("app/data/audio_out") / fname
+                                if local_p.exists():
+                                    audio_bytes = local_p.read_bytes()
+                                else:
+                                    try:
+                                        r_aud = requests.get(f"{API_URL}/audio/{fname}", timeout=15)
+                                        if r_aud.ok:
+                                            audio_bytes = r_aud.content
+                                    except Exception:
+                                        pass
+
+                            msg_idx = len(st.session_state.messages)
+                            if audio_bytes:
+                                st.session_state.audio_cache[msg_idx] = audio_bytes
 
                             st.session_state.messages.append({
                                 "role": "assistant",
@@ -902,7 +996,7 @@ with tab_chat:
                                 "sources": result.get("sources", []),
                                 "rewritten_query": result.get("rewritten_query"),
                                 "detected_language": result.get("detected_language", "en"),
-                                "audio_url": audio_url,
+                                "audio_bytes": audio_bytes,
                             })
                             save_current_chat_session()
                             st.rerun()

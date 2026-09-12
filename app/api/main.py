@@ -527,10 +527,35 @@ def get_audio(filename: str):
     return FileResponse(str(file_path), media_type="audio/mpeg")
 
 
+class SpeakRequest(BaseModel):
+    text: Optional[str] = None
+    language: Optional[str] = "en"
+
+
 @app.post("/speak")
-def speak_endpoint(text: str, language: str = "en"):
+def speak_endpoint(req: Optional[SpeakRequest] = None, text: Optional[str] = None, language: str = "en"):
+    target_text = ""
+    target_lang = "en"
+    if req and req.text:
+        target_text = req.text
+        target_lang = req.language or "en"
+    elif text:
+        target_text = text
+        target_lang = language or "en"
+
+    if not target_text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+
+    # Clean markdown and HTML tags for smooth natural speech synthesis
+    import re
+    clean_text = re.sub(r"<[^>]+>", " ", target_text)
+    clean_text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", clean_text)
+    clean_text = re.sub(r"[*_#>`~]", " ", clean_text)
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    clean_text = clean_text[:1200]
+
     try:
-        path = synthesize_speech(text, language, output_dir=str(AUDIO_OUT_DIR))
+        path = synthesize_speech(clean_text, target_lang, output_dir=str(AUDIO_OUT_DIR))
         return {"audio_path": path, "filename": Path(path).name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
