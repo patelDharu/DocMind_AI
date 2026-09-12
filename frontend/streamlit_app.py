@@ -3,16 +3,35 @@
 import base64
 import json
 import os
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+# Ensure project root is in sys.path so app.* modules are always importable
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
+from app.core.auth import init_user_db, register_user, authenticate_user
+
 API_URL = "http://127.0.0.1:8000"
-CHAT_SESSIONS_FILE = Path("app/data/chat_sessions.json")
-chat_bar_component = components.declare_component("chat_bar", path="frontend/components/chat_bar")
+
+
+def get_chat_sessions_file() -> Path:
+    """Returns user-scoped chat sessions file path or fallback default."""
+    if st.session_state.get("current_user"):
+        u_id = st.session_state.current_user.get("user_id", "default")
+        return ROOT_DIR / "app" / "data" / f"chat_sessions_{u_id}.json"
+    return ROOT_DIR / "app" / "data" / "chat_sessions.json"
+
+
+chat_bar_path = str(ROOT_DIR / "frontend" / "components" / "chat_bar")
+chat_bar_component = components.declare_component("chat_bar", path=chat_bar_path)
 
 st.set_page_config(
     page_title="DocMind AI — Document Intelligence & Studio",
@@ -247,10 +266,16 @@ st.markdown("""
 
 def load_chat_sessions():
     """Load all saved chat sessions from disk, sorted newest first."""
-    if not CHAT_SESSIONS_FILE.exists():
-        return []
+    s_file = get_chat_sessions_file()
+    if not s_file.exists():
+        # Fallback to shared sessions file if user-specific does not exist yet
+        fallback = ROOT_DIR / "app" / "data" / "chat_sessions.json"
+        if fallback.exists():
+            s_file = fallback
+        else:
+            return []
     try:
-        with open(CHAT_SESSIONS_FILE, "r", encoding="utf-8") as f:
+        with open(s_file, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
                 return data
@@ -261,9 +286,10 @@ def load_chat_sessions():
 
 def save_chat_sessions(sessions):
     """Save chat sessions list to disk."""
+    s_file = get_chat_sessions_file()
     try:
-        CHAT_SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CHAT_SESSIONS_FILE, "w", encoding="utf-8") as f:
+        s_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(s_file, "w", encoding="utf-8") as f:
             json.dump(sessions, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Error saving chat sessions: {e}")
@@ -368,8 +394,16 @@ def delete_chat_session(session_id: str):
 
 
 # =========================================================
-# SESSION STATE INITIALIZATION
+# SESSION STATE INITIALIZATION & AUTH DB
 # =========================================================
+
+init_user_db()
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
 
 if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = str(uuid.uuid4())[:8]
@@ -420,7 +454,7 @@ def synthesize_audio_api(text: str, lang: str = "en") -> bytes | None:
             data = res.json()
             fname = data.get("filename")
             # 1. Try reading directly from local output directory on server
-            local_p = Path("app/data/audio_out") / fname
+            local_p = ROOT_DIR / "app" / "data" / "audio_out" / fname
             if local_p.exists():
                 return local_p.read_bytes()
             # 2. Or fetch audio bytes via container internal API call
@@ -522,18 +556,188 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
 
 
 # =========================================================
-# SIDEBAR: DOCUMENT REPOSITORY & SELECTION
+# AUTHENTICATION & LOGIN / SIGN UP PORTAL
 # =========================================================
+
+def render_auth_page():
+    """Renders a responsive, modern, and high-contrast Sign In / Sign Up portal."""
+    st.markdown("""
+    <style>
+        [data-testid="stSidebar"] {
+            display: none !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] {
+            display: none !important;
+        }
+        .auth-brand-badge {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin: 0 auto 12px auto;
+            box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);
+        }
+        .auth-header-title {
+            text-align: center;
+            font-size: 26px;
+            font-weight: 800;
+            color: #0f172a;
+            margin: 0;
+            letter-spacing: -0.5px;
+        }
+        .auth-header-sub {
+            text-align: center;
+            font-size: 13.5px;
+            color: #64748b;
+            margin: 6px 0 18px 0;
+        }
+        .demo-credential-box {
+            background: #f8fafc;
+            border: 1.5px dashed #cbd5e1;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-top: 14px;
+            margin-bottom: 12px;
+            text-align: center;
+            font-size: 13px;
+            color: #334155;
+            line-height: 1.5;
+        }
+        @media (max-width: 600px) {
+            .auth-header-title {
+                font-size: 22px;
+            }
+            .auth-header-sub {
+                font-size: 12.5px;
+                margin-bottom: 14px;
+            }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    _, col_center, _ = st.columns([1, 1.8, 1])
+    with col_center:
+        st.markdown("""
+        <div class="auth-brand-badge">📚</div>
+        <h1 class="auth-header-title">DocMind AI</h1>
+        <p class="auth-header-sub">Trilingual Multi-Document Intelligence & Studio</p>
+        """, unsafe_allow_html=True)
+
+        tab_signin, tab_signup = st.tabs(["🔐 Sign In", "📝 Create Account"])
+
+        with tab_signin:
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            with st.form("auth_signin_form", clear_on_submit=False):
+                in_email = st.text_input("Email Address", placeholder="name@company.com", key="auth_signin_email")
+                in_pwd = st.text_input("Password", type="password", placeholder="Enter your password", key="auth_signin_pwd")
+                submitted_signin = st.form_submit_button("Sign In to DocMind", use_container_width=True, type="primary")
+
+                if submitted_signin:
+                    success, msg, user = authenticate_user(in_email, in_pwd)
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = user
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+            st.markdown("""
+            <div class="demo-credential-box">
+                💡 <strong>Pre-configured Demo Account</strong><br/>
+                Email: <code>demo@docmind.ai</code> &bull; Password: <code>Demo@123</code>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("⚡ 1-Click Demo Sign In", key="auth_demo_signin_btn", use_container_width=True):
+                success, msg, user = authenticate_user("demo@docmind.ai", "Demo@123")
+                if success:
+                    st.session_state.authenticated = True
+                    st.session_state.current_user = user
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        with tab_signup:
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+            with st.form("auth_signup_form", clear_on_submit=False):
+                up_name = st.text_input("Full Name", placeholder="e.g. Alex Morgan", key="auth_signup_name")
+                up_email = st.text_input("Email Address", placeholder="name@company.com", key="auth_signup_email")
+                up_pwd = st.text_input("Password (min 6 characters)", type="password", placeholder="Create a password", key="auth_signup_pwd")
+                up_pwd_confirm = st.text_input("Confirm Password", type="password", placeholder="Re-enter your password", key="auth_signup_pwd_confirm")
+                submitted_signup = st.form_submit_button("Create Account & Sign In", use_container_width=True, type="primary")
+
+                if submitted_signup:
+                    if not up_name.strip():
+                        st.error("Please enter your full name.")
+                    elif not up_email.strip():
+                        st.error("Please enter a valid email address.")
+                    elif up_pwd != up_pwd_confirm:
+                        st.error("Passwords do not match. Please verify and try again.")
+                    elif len(up_pwd) < 6:
+                        st.error("Password must be at least 6 characters long.")
+                    else:
+                        success, msg, user = register_user(up_name, up_email, up_pwd)
+                        if success:
+                            st.session_state.authenticated = True
+                            st.session_state.current_user = user
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+
+# =========================================================
+# AUTHENTICATION GATEWAY
+# =========================================================
+
+if not st.session_state.get("authenticated", False):
+    render_auth_page()
+    st.stop()
+
+
+# =========================================================
+# SIDEBAR: USER PROFILE & DOCUMENT REPOSITORY
+# =========================================================
+
+curr_user = st.session_state.get("current_user") or {}
+u_name = curr_user.get("name", "DocMind User")
+u_email = curr_user.get("email", "")
+u_init = u_name[0].upper() if u_name else "U"
+
+st.sidebar.markdown(f"""
+<div style="display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px;">
+    <div style="display: flex; align-items: center; gap: 10px; overflow: hidden;">
+        <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #ffffff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79,70,229,0.3);">
+            {u_init}
+        </div>
+        <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <div style="font-weight: 700; font-size: 13.5px; color: #0f172a; line-height: 1.25; overflow: hidden; text-overflow: ellipsis;">{u_name}</div>
+            <div style="font-size: 11px; color: #64748b; line-height: 1.2; overflow: hidden; text-overflow: ellipsis;">{u_email}</div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+c_nav1, c_nav2 = st.sidebar.columns([1.4, 1])
+with c_nav1:
+    if st.button("➕ New Chat", key="top_new_chat_btn", use_container_width=True, type="primary"):
+        start_new_chat()
+        st.rerun()
+with c_nav2:
+    if st.button("🚪 Sign Out", key="sidebar_signout_btn", use_container_width=True, help="Sign out of your account"):
+        st.session_state.authenticated = False
+        st.session_state.current_user = None
+        st.session_state.messages = []
+        st.session_state.current_session_id = str(uuid.uuid4())[:8]
+        st.rerun()
 
 st.sidebar.title("📚 DocMind AI")
 st.sidebar.caption("Trilingual RAG & Document Studio")
-
-# ---------------------------------------------------------
-# ChatGPT-Style: Primary ➕ New Chat Action
-# ---------------------------------------------------------
-if st.sidebar.button("➕ New Chat", key="top_new_chat_btn", use_container_width=True, type="primary"):
-    start_new_chat()
-    st.rerun()
 
 # ---------------------------------------------------------
 # ChatGPT-Style: Recent Chats / Conversation History

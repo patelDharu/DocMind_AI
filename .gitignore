@@ -17,6 +17,8 @@ app/data/audio_out/*
 app/data/vectorstore/*
 app/data/generated/*
 app/data/chat_sessions.json
+app/data/chat_sessions_*.json
+app/data/users.db
 
 # OS
 .DS_Store
