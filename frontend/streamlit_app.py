@@ -50,23 +50,17 @@ st.markdown("""
         margin-bottom: 0.75rem !important;
     }
 
-    /* Fixed floating bottom search bar container */
+    /* Fixed floating bottom search bar container (ChatGPT style) */
     div[data-testid="stBottom"] {
-        display: none !important;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.92) 30%, #ffffff 100%) !important;
-        padding-top: 16px !important;
-        padding-bottom: 8px !important;
+        display: block !important;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.95) 30%, #ffffff 100%) !important;
+        padding-top: 14px !important;
+        padding-bottom: 10px !important;
         z-index: 9999 !important;
     }
 
-    /* Show stBottom only when Tab 1 (Chat & Q&A) is the active tab */
-    body:has(.stTabs [data-baseweb="tab-list"] > button:first-child[aria-selected="true"]) div[data-testid="stBottom"],
-    body:has(.stTabs [data-baseweb="tab-list"] > [role="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
-    body:has(.stTabs button[data-baseweb="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
-    .stApp:has(.stTabs [data-baseweb="tab-list"] > button:first-child[aria-selected="true"]) div[data-testid="stBottom"],
-    .stApp:has(.stTabs [data-baseweb="tab-list"] > [role="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"],
-    .stApp:has(.stTabs button[data-baseweb="tab"]:first-child[aria-selected="true"]) div[data-testid="stBottom"] {
-        display: block !important;
+    div[data-testid="stCustomComponentV1"]:has(iframe[title*="chat_bar"]) {
+        min-height: 68px !important;
     }
 
     div[data-testid="stBottomBlockContainer"] {
