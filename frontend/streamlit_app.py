@@ -212,6 +212,29 @@ st.markdown("""
         }
     }
 
+    /* Universal Responsiveness & Mobile Enhancements */
+    div[role="radiogroup"] {
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
+    div[data-testid="column"]:empty {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    .stMarkdown table {
+        display: block !important;
+        width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    .stMarkdown pre {
+        max-width: 100% !important;
+        overflow-x: auto !important;
+        word-break: break-word !important;
+        white-space: pre-wrap !important;
+    }
+
     /* Mobile Phone (<= 600px) */
     @media (max-width: 600px) {
         .block-container {
@@ -264,6 +287,28 @@ st.markdown("""
 # CHAT SESSIONS & HISTORY PERSISTENCE (ChatGPT-STYLE)
 # =========================================================
 
+def clean_legacy_html(text: str) -> str:
+    """Strip legacy HTML boxes, borders, and styled containers, converting them to clean markdown."""
+    if not isinstance(text, str) or ("<div" not in text and "<span" not in text):
+        return text
+    import re
+    t = text
+    # Convert list items before stripping tags
+    t = re.sub(r'<li[^>]*>', '• ', t)
+    t = re.sub(r'</li>', '\n', t)
+    # Convert strong tags to markdown bold
+    t = re.sub(r'<strong[^>]*>', '**', t)
+    t = re.sub(r'</strong>', '**', t)
+    # Convert em tags to markdown italic
+    t = re.sub(r'<em[^>]*>', '*', t)
+    t = re.sub(r'</em>', '*', t)
+    # Strip remaining HTML tags
+    t = re.sub(r'</?(?:div|span|ul|ol|p|small|br|h\d)[^>]*>', '\n', t)
+    # Collapse multiple consecutive newlines
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    return t.strip()
+
+
 def load_chat_sessions():
     """Load all saved chat sessions from disk, sorted newest first."""
     s_file = get_chat_sessions_file()
@@ -278,6 +323,10 @@ def load_chat_sessions():
         with open(s_file, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, list):
+                for session in data:
+                    for m in session.get("messages", []):
+                        if "content" in m:
+                            m["content"] = clean_legacy_html(m["content"])
                 return data
     except Exception:
         pass
@@ -467,64 +516,38 @@ def synthesize_audio_api(text: str, lang: str = "en") -> bytes | None:
 
 
 def format_action_alert_markdown(alert: dict) -> str:
-    """Formats proactive action & deadline alert into a modern, high-contrast, structured card."""
+    """Formats proactive action & deadline alert into clean, natural markdown without confusing boxes or excessive colors."""
     if not alert:
         return ""
 
     requires_action = alert.get("requires_action", False)
-    urgency = (alert.get("urgency") or "none").lower()
     doc_type = alert.get("document_type") or "Document"
     deadline = alert.get("deadline")
     summary = alert.get("action_summary", "")
     items = alert.get("action_items", [])
     consequences = alert.get("consequences")
 
+    parts = []
     if requires_action:
-        urgency_color = "#dc2626" if urgency == "high" else ("#d97706" if urgency == "medium" else "#2563eb")
-        urgency_bg = "#fef2f2" if urgency == "high" else ("#fffbeb" if urgency == "medium" else "#eff6ff")
-        urgency_border = "#fca5a5" if urgency == "high" else ("#fde68a" if urgency == "medium" else "#bfdbfe")
-        urgency_text = "🔴 HIGH URGENCY — ACTION REQUIRED" if urgency == "high" else ("🟡 MEDIUM URGENCY — ACTION REQUIRED" if urgency == "medium" else "🔵 LOW URGENCY — ACTION RECOMMENDED")
+        parts.append(f"### ⚠️ Action Required ({doc_type})")
+        if summary:
+            parts.append(f"**Action Summary:** {summary}")
 
-        items_html = ""
-        if items and isinstance(items, list):
-            items_li = "".join([f"<li style='margin-bottom: 5px;'>{it}</li>" for it in items if it])
-            items_html = f"<div style='margin-top: 10px; font-weight: 600; color: #1e293b; font-size: 14px;'>📋 What You Need To Do:</div><ul style='margin: 4px 0 10px 20px; padding: 0; color: #334155; font-size: 13.5px; line-height: 1.5;'>{items_li}</ul>"
-
-        deadline_html = ""
         if deadline and str(deadline).lower() not in ["null", "none", ""]:
-            deadline_html = f"<div style='background: #fee2e2; border-left: 4px solid #ef4444; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #991b1b; font-weight: 600; font-size: 14px;'>📅 <strong>Deadline / Due Date</strong>: {deadline}</div>"
+            parts.append(f"📅 **Due Date / Deadline:** {deadline}")
 
-        consequences_html = ""
+        if items and isinstance(items, list):
+            item_bullets = "\n".join([f"• {it}" for it in items if it])
+            parts.append(f"**What you need to do:**\n{item_bullets}")
+
         if consequences and str(consequences).lower() not in ["null", "none", ""]:
-            consequences_html = f"<div style='background: #fffbeb; border-left: 4px solid #f59e0b; padding: 8px 14px; border-radius: 6px; margin: 10px 0; color: #92400e; font-size: 13.5px; line-height: 1.45;'>⚠️ <strong>Consequences If Missed</strong>: {consequences}</div>"
-
-        card_html = (
-            f"<div style='background: #ffffff; border: 1.5px solid {urgency_border}; border-left: 6px solid {urgency_color}; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
-            f"<div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;'>"
-            f"<span style='background: {urgency_bg}; color: {urgency_color}; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid {urgency_border};'>{urgency_text}</span>"
-            f"<span style='color: #64748b; font-size: 13px; font-weight: 500;'>📋 Document Classification: <strong style='color: #334155;'>{doc_type}</strong></span>"
-            f"</div>"
-            f"<div style='font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;'>⚠️ Proactive Alert: Action Required</div>"
-            f"<div style='font-size: 14px; color: #334155; line-height: 1.6;'><strong>🎯 Action Summary</strong>: {summary}</div>"
-            f"{deadline_html}"
-            f"{items_html}"
-            f"{consequences_html}"
-            f"</div>"
-        )
-        return card_html
+            parts.append(f"ℹ️ **Important Note:** {consequences}")
     else:
-        card_html = (
-            f"<div style='background: #ffffff; border: 1.5px solid #bbf7d0; border-left: 6px solid #16a34a; border-radius: 12px; padding: 16px 20px; margin: 8px 0 14px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
-            f"<div style='display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;'>"
-            f"<span style='background: #f0fdf4; color: #15803d; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 12.5px; border: 1px solid #bbf7d0;'>✅ INFORMATIONAL DOCUMENT (NO ACTION NEEDED)</span>"
-            f"<span style='color: #64748b; font-size: 13px; font-weight: 500;'>📋 Document Classification: <strong style='color: #334155;'>{doc_type}</strong></span>"
-            f"</div>"
-            f"<div style='font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 6px;'>ℹ️ Proactive Alert: Informational Status</div>"
-            f"<div style='font-size: 14px; color: #334155; line-height: 1.6;'>{summary}</div>"
-            f"<div style='font-size: 12.5px; color: #64748b; margin-top: 6px; font-style: italic;'>*This document has been reviewed. No pending obligations, payments, or upcoming deadlines were detected.*</div>"
-            f"</div>"
-        )
-        return card_html
+        parts.append(f"### 📄 {doc_type} (Informational)")
+        if summary:
+            parts.append(summary)
+
+    return "\n\n".join(parts)
 
 
 def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str | None:
@@ -595,25 +618,58 @@ def render_auth_page():
             color: #64748b;
             margin: 6px 0 18px 0;
         }
-        .demo-credential-box {
-            background: #f8fafc;
-            border: 1.5px dashed #cbd5e1;
-            border-radius: 10px;
-            padding: 12px 16px;
-            margin-top: 14px;
-            margin-bottom: 12px;
-            text-align: center;
-            font-size: 13px;
-            color: #334155;
-            line-height: 1.5;
+        /* Sign In button: Clean white background with border and dark text */
+        div[data-testid="stForm"] button[kind="secondary"],
+        div[data-testid="stForm"] button[data-testid="baseButton-secondary"] {
+            background-color: #ffffff !important;
+            color: #1e293b !important;
+            border: 1.5px solid #cbd5e1 !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            font-size: 15px !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+            transition: all 0.15s ease !important;
         }
-        @media (max-width: 600px) {
+        div[data-testid="stForm"] button[kind="secondary"]:hover,
+        div[data-testid="stForm"] button[data-testid="baseButton-secondary"]:hover {
+            background-color: #f8fafc !important;
+            border-color: #94a3b8 !important;
+            color: #0f172a !important;
+        }
+
+        /* Free Demo Sign In button: Bold Red background with white text */
+        div[data-testid="stForm"] button[kind="primary"],
+        div[data-testid="stForm"] button[data-testid="baseButton-primary"] {
+            background-color: #ff4b4b !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            font-size: 15px !important;
+            box-shadow: 0 2px 6px rgba(255, 75, 75, 0.25) !important;
+            transition: all 0.15s ease !important;
+        }
+        div[data-testid="stForm"] button[kind="primary"]:hover,
+        div[data-testid="stForm"] button[data-testid="baseButton-primary"]:hover {
+            background-color: #e63939 !important;
+            box-shadow: 0 4px 12px rgba(255, 75, 75, 0.35) !important;
+        }
+        @media (max-width: 768px) {
             .auth-header-title {
                 font-size: 22px;
             }
             .auth-header-sub {
                 font-size: 12.5px;
                 margin-bottom: 14px;
+            }
+            div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child,
+            div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
+                display: none !important;
+            }
+            div[data-testid="stMainBlockContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+                max-width: 100% !important;
             }
         }
     </style>
@@ -634,7 +690,10 @@ def render_auth_page():
             with st.form("auth_signin_form", clear_on_submit=False):
                 in_email = st.text_input("Email Address", placeholder="name@company.com", key="auth_signin_email")
                 in_pwd = st.text_input("Password", type="password", placeholder="Enter your password", key="auth_signin_pwd")
-                submitted_signin = st.form_submit_button("Sign In to DocMind", use_container_width=True, type="primary")
+                
+                st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+                submitted_signin = st.form_submit_button("Sign In to DocMind", use_container_width=True, type="secondary")
+                submitted_demo = st.form_submit_button("⚡ Free Demo Sign In", use_container_width=True, type="primary")
 
                 if submitted_signin:
                     success, msg, user = authenticate_user(in_email, in_pwd)
@@ -646,21 +705,14 @@ def render_auth_page():
                     else:
                         st.error(msg)
 
-            st.markdown("""
-            <div class="demo-credential-box">
-                💡 <strong>Pre-configured Demo Account</strong><br/>
-                Email: <code>demo@docmind.ai</code> &bull; Password: <code>Demo@123</code>
-            </div>
-            """, unsafe_allow_html=True)
-
-            if st.button("⚡ 1-Click Demo Sign In", key="auth_demo_signin_btn", use_container_width=True):
-                success, msg, user = authenticate_user("demo@docmind.ai", "Demo@123")
-                if success:
-                    st.session_state.authenticated = True
-                    st.session_state.current_user = user
-                    st.rerun()
-                else:
-                    st.error(msg)
+                if submitted_demo:
+                    success, msg, user = authenticate_user("demo@docmind.ai", "Demo@123")
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = user
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
         with tab_signup:
             st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -737,10 +789,10 @@ with c_nav2:
         st.rerun()
 
 st.sidebar.title("📚 DocMind AI")
-st.sidebar.caption("Trilingual RAG & Document Studio")
+st.sidebar.caption("Smart Document Assistant & Studio")
 
 # ---------------------------------------------------------
-# ChatGPT-Style: Recent Chats / Conversation History
+# GPT-Style: Recent Chats / Conversation History
 # ---------------------------------------------------------
 saved_sessions = load_chat_sessions()
 if saved_sessions:
@@ -830,16 +882,16 @@ if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
 # =========================================================
 
 tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
-    "💬 ChatGPT-Style Chat & Q&A",
-    "✍️ Document Studio (Edit & Export)",
-    "📝 Document Summarization",
+    "💬 GPT-Style Chat & Q&A",
+    "✍️ Document Editor (Add & Edit Content)",
+    "📝 Document Summarizer",
     "⚖️ Document Comparison",
-    "📊 Structured Extraction",
+    "📊 Extract Key Information",
 ])
 
 
 # =========================================================
-# TAB 1: CHATGPT-STYLE MASTER CHAT & Q&A
+# TAB 1: GPT-STYLE MASTER CHAT & Q&A
 # =========================================================
 
 with tab_chat:
@@ -886,89 +938,29 @@ with tab_chat:
     else:
         for idx, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
-                st.markdown(msg["content"], unsafe_allow_html=True)
+                st.markdown(clean_legacy_html(msg["content"]), unsafe_allow_html=True)
 
                 if msg["role"] == "assistant":
-                    col_m1, col_m2 = st.columns([4, 1])
-                    with col_m1:
-                        conf = msg.get("confidence")
-                        if conf == "high":
-                            st.markdown('<span class="badge-high">🟢 High Confidence</span>', unsafe_allow_html=True)
-                        elif conf == "medium":
-                            st.markdown('<span class="badge-med">🟡 Medium Confidence</span>', unsafe_allow_html=True)
-                        elif conf == "low":
-                            st.markdown('<span class="badge-low">🔴 Low Confidence / Grounding Guardrail</span>', unsafe_allow_html=True)
-
-                        if msg.get("rewritten_query"):
-                            st.caption(f"🔍 *Decontextualized search query:* `{msg['rewritten_query']}`")
-
-                    with col_m2:
-                        # 🔊 Speaker / Listen Button (ChatGPT-Style Audio Playback)
-                        if st.button("🔊 Listen", key=f"speak_btn_{idx}", help="Play answer audio"):
-                            audio_data = msg.get("audio_bytes")
-                            if not audio_data:
-                                audio_data = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
-                                msg["audio_bytes"] = audio_data
-                            if audio_data:
-                                st.session_state.audio_cache[idx] = audio_data
+                    # Audio Playback
+                    if st.button("🔊 Listen", key=f"speak_btn_{idx}", help="Play answer audio"):
+                        audio_data = msg.get("audio_bytes")
+                        if not audio_data:
+                            audio_data = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
+                            msg["audio_bytes"] = audio_data
+                        if audio_data:
+                            st.session_state.audio_cache[idx] = audio_data
 
                     if idx in st.session_state.audio_cache:
                         st.audio(st.session_state.audio_cache[idx], format="audio/mp3")
 
-                    # 🔔 Proactive Action & Deadline Controls (Trilingual Switcher & Voice)
-                    alert_info = msg.get("action_alert")
-                    doc_id_ref = msg.get("doc_id") or st.session_state.active_doc_id
-                    if alert_info:
-                        with st.expander("🔔 Action Alert: Translate & 🔊 Read Aloud", expanded=False):
-                            ca1, ca2 = st.columns([3, 2])
-                            with ca1:
-                                cur_l = alert_info.get("language", "en")
-                                opts_l = ["en", "hi", "gu"]
-                                def_idx = opts_l.index(cur_l) if cur_l in opts_l else 0
-                                new_l = st.radio(
-                                    "Alert Language:",
-                                    opts_l,
-                                    index=def_idx,
-                                    format_func=lambda x: {"en": "🇬🇧 English", "hi": "🇮🇳 हिन्दी (Hindi)", "gu": "🇮🇳 ગુજરાતી (Gujarati)"}[x],
-                                    horizontal=True,
-                                    key=f"alert_lang_radio_{idx}",
-                                )
-                                if new_l != cur_l and doc_id_ref:
-                                    try:
-                                        r_al = requests.get(f"{API_URL}/document/{doc_id_ref}/action-alert", params={"language": new_l}, timeout=30)
-                                        if r_al.ok:
-                                            new_alert_data = r_al.json().get("action_alert", {})
-                                            old_md = format_action_alert_markdown(alert_info)
-                                            new_md = format_action_alert_markdown(new_alert_data)
-                                            msg["action_alert"] = new_alert_data
-                                            if old_md in msg["content"]:
-                                                msg["content"] = msg["content"].replace(old_md, new_md)
-                                            st.session_state.setdefault("doc_action_alerts", {})[doc_id_ref] = new_alert_data
-                                            st.rerun()
-                                    except Exception as err:
-                                        st.error(f"Translation failed: {err}")
-
-                            with ca2:
-                                if st.button("🔊 Listen to Alert", key=f"listen_alert_btn_{idx}", help="Read alert aloud in selected language"):
-                                    speak_text = alert_info.get("action_summary", "") or alert_info.get("alert_markdown", "")
-                                    aud_bytes = synthesize_audio_api(speak_text, alert_info.get("language", "en"))
-                                    if aud_bytes:
-                                        st.session_state.audio_cache[f"alert_audio_{idx}"] = aud_bytes
-
-                            if f"alert_audio_{idx}" in st.session_state.audio_cache:
-                                st.audio(st.session_state.audio_cache[f"alert_audio_{idx}"], format="audio/mp3")
-
-                    # Source Citations
+                    # References / Citations (Clean Markdown, no nested cards)
                     sources = msg.get("sources", [])
                     if sources:
-                        with st.expander(f"📖 Sources & Evidence ({len(sources)} citations)", expanded=False):
+                        with st.expander(f"📄 Referenced Sources ({len(sources)})", expanded=False):
                             for s in sources:
-                                st.markdown(f"""
-                                <div class="source-card">
-                                    <strong>📄 {s['source']}</strong> — Page {s['page']} &nbsp;·&nbsp; <em>Relevance: {s['score']}</em><br/>
-                                    <small style="color:#555;">"{s.get('snippet', '')}"</small>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                page_info = f" (Page {s['page']})" if s.get('page') else ""
+                                snippet = f"\n> *\"{s['snippet']}\"*" if s.get('snippet') else ""
+                                st.markdown(f"• **{s.get('source', 'Document')}**{page_info}{snippet}")
 
     # -------------------------------------------------------------
     # ChatGPT-Style Floating Bottom Docked Searchbar
@@ -1060,7 +1052,11 @@ with tab_chat:
                                     "role": "user",
                                     "content": f"📎 Attached document: **{fname}**",
                                 })
-                                welcome_msg = f"✅ Successfully indexed **{fname}** ({data.get('chunks_indexed', 0)} chunks).\n\n{alert_block}\n\nAsk me any question about this document, request a summary, or open Document Studio to modify it!"
+                                welcome_parts = [f"📄 **{fname}** is ready."]
+                                if alert_block:
+                                    welcome_parts.append(alert_block)
+                                welcome_parts.append("---\n*Ask any question about this document below, or choose an option from the tabs above.*")
+                                welcome_msg = "\n\n".join(welcome_parts)
                                 st.session_state.messages.append({
                                     "role": "assistant",
                                     "content": welcome_msg,
@@ -1184,63 +1180,84 @@ with tab_chat:
 # =========================================================
 
 with tab_studio:
-    st.markdown("### ✍️ Document Studio: Prompt-Based Augmenter & Exporter")
-    st.caption("Upload a document directly to add new sections, appendices, payment terms, or update clauses via AI prompt, then export to PDF or DOCX.")
+    st.markdown("### ✍️ Document Editor: Update or Add Content")
+    st.caption("Easily add new clauses, payment terms, follow-ups, or edit existing sections in plain words, then download in Word or PDF.")
 
-    col_upload, col_opts = st.columns([3, 2])
-    with col_upload:
-        studio_file = st.file_uploader(
-            "📁 Upload Document to Modify & Export (PDF, Word, TXT, Excel, etc.):",
-            type=["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "pptx"],
-            key="studio_direct_file_uploader",
-            help="Drag and drop or browse the specific document you want to edit with Document Studio.",
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+    # Step 1: Document Selection
+    st.markdown("#### **Step 1: Choose your document**")
+    st.caption("Upload the document you want to add content to or edit.")
+    studio_file = st.file_uploader(
+        "Upload document (PDF, Word, Excel, PowerPoint, or Text):",
+        type=["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "pptx"],
+        key="studio_direct_file_uploader",
+        help="Drag and drop or browse the specific document you want to edit.",
+    )
+    use_active_doc = False
+    if st.session_state.active_doc_id and not studio_file:
+        active_name = next(
+            (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+            "Active Document"
         )
-        use_active_doc = False
-        if st.session_state.active_doc_id and not studio_file:
-            active_name = next(
-                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
-                "Active Document"
-            )
-            use_active_doc = st.checkbox(
-                f"⚡ Or use currently active chat document: **{active_name}**",
-                value=False,
-                key="studio_use_active_check",
-            )
-
-    with col_opts:
-        export_format = st.radio(
-            "Export Format",
-            ["DOCX (.docx)", "PDF (.pdf)"],
-            horizontal=True,
-            key="studio_export_fmt",
+        use_active_doc = st.checkbox(
+            f"⚡ Or use current document from chat: **{active_name}**",
+            value=False,
+            key="studio_use_active_check",
         )
-        fmt_ext = "docx" if "docx" in export_format.lower() else "pdf"
 
-        edit_mode_label = st.radio(
-            "Modification Mode",
-            [
-                "➕ Append New Section / Appendix (Fast & Safe)",
-                "✏️ Revise / Edit Existing Sections",
-            ],
-            help="Append mode drafts only the new content using minimal tokens, completely avoiding 429 quota limits, and appends it to your full document.",
-            key="studio_mode_radio",
-        )
-        selected_mode = "append" if "Append" in edit_mode_label else "revise"
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
 
+    # Step 2: Action / Mode Selection
+    st.markdown("#### **Step 2: What would you like to do?**")
+    st.caption("Choose whether you want to add new information at the end or edit existing text.")
+    edit_mode_label = st.radio(
+        "Select action:",
+        [
+            "➕ Add new content to the end of the document (Simple, Fast & Safe)",
+            "✏️ Edit or rewrite text inside the document",
+        ],
+        key="studio_mode_radio",
+    )
+    selected_mode = "append" if "Add" in edit_mode_label else "revise"
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 3: Format Selection
+    st.markdown("#### **Step 3: Choose download format**")
+    st.caption("Select what type of file you want to download once the updates are completed.")
+    export_format = st.radio(
+        "Select format:",
+        ["📄 Word Document (.docx)", "📑 PDF Document (.pdf)"],
+        horizontal=True,
+        key="studio_export_fmt",
+    )
+    fmt_ext = "docx" if "docx" in export_format.lower() else "pdf"
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 4: Instructions
+    st.markdown("#### **Step 4: Tell the AI what changes to make**")
+    st.caption("Describe what you want to add or change in plain everyday words.")
     prompt_instruction = st.text_area(
-        "Enter your update instruction (e.g. Add sections, clauses, or appendices):",
-        placeholder="e.g., Add Section 6: Payment Terms & Milestones (40% advance, 60% upon delivery with 30-day net credit). Include an SLA clause guaranteeing 99.9% uptime with 5% monthly penalty for breaches.",
-        height=110,
+        "Your instructions:",
+        placeholder="For example:\n• Add Payment Terms at the end: 50% advance and 50% upon delivery with 18% GST.\n• Add a new section on Patient Care Follow-up Instructions.\n• Add a Confidentiality and Non-Disclosure clause valid for 2 years.",
+        height=120,
         key="studio_prompt_instruction",
     )
 
+    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
     auto_index_check = st.checkbox(
-        "Auto-index updated document into DocMind (so you can immediately chat with the updated version)",
+        "✅ Save this updated document to my library (so I can chat with it right away)",
         value=True,
         key="studio_auto_index_check",
     )
 
-    if st.button("✨ Generate & Export Updated Document", type="primary", key="studio_generate_btn"):
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    if st.button("✨ Update & Download Document", type="primary", use_container_width=True, key="studio_generate_btn"):
         target_doc_id = None
         target_filename = ""
         if studio_file:
@@ -1301,44 +1318,71 @@ with tab_studio:
 # =========================================================
 
 with tab_summarize:
-    st.markdown("### 📝 Intelligent Document Summarization")
-    st.caption("Upload a document directly to generate executive, detailed, or action-oriented summaries in English, Hindi, or Gujarati.")
+    st.markdown("### 📝 Document Summarizer")
+    st.caption("Get a clear, easy-to-read summary of any document in seconds.")
 
-    col_sum_up, col_sum_opt = st.columns([3, 2])
-    with col_sum_up:
-        sum_file = st.file_uploader(
-            "📁 Upload Document to Summarize (PDF, Word, Excel, CSV, PPTX, TXT):",
-            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
-            key="sum_direct_file_uploader",
-            help="Drag and drop or browse the specific document you want to summarize.",
-        )
-        use_active_doc_sum = False
-        if st.session_state.active_doc_id and not sum_file:
-            active_name = next(
-                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
-                "Active Document"
-            )
-            use_active_doc_sum = st.checkbox(
-                f"⚡ Or summarize currently active chat document: **{active_name}**",
-                value=False,
-                key="sum_use_active_check",
-            )
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 
-    with col_sum_opt:
-        sum_type = st.selectbox(
-            "Summary Format",
-            ["executive", "detailed", "bullet_points"],
-            format_func=lambda x: x.replace("_", " ").title(),
-            key="sum_format_select",
+    # Step 1: Document Selection
+    st.markdown("#### **Step 1: Choose your document**")
+    st.caption("Upload the document you would like to summarize.")
+    sum_file = st.file_uploader(
+        "Upload document (PDF, Word, Excel, PowerPoint, or Text):",
+        type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+        key="sum_direct_file_uploader",
+        help="Drag and drop or browse the specific document you want to summarize.",
+    )
+    use_active_doc_sum = False
+    if st.session_state.active_doc_id and not sum_file:
+        active_name = next(
+            (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+            "Active Document"
         )
-        sum_lang = st.selectbox(
-            "Output Language",
-            ["en", "hi", "gu"],
-            format_func=lambda x: {"en": "English", "hi": "हिन्दी (Hindi)", "gu": "ગુજરાતી (Gujarati)"}[x],
-            key="sum_lang_select",
+        use_active_doc_sum = st.checkbox(
+            f"⚡ Or summarize current document from chat: **{active_name}**",
+            value=False,
+            key="sum_use_active_check",
         )
 
-    if st.button("✨ Generate Summary", type="primary", key="btn_gen_summary"):
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 2: Summary Format Selection
+    st.markdown("#### **Step 2: What kind of summary do you need?**")
+    st.caption("Select how you would like the summary presented.")
+    sum_type_options = {
+        "executive": "⚡ Quick Overview — Key takeaways in 1-2 minutes",
+        "bullet_points": "📋 Bullet Points — Simple checklist of main highlights",
+        "detailed": "📖 Full Detailed Summary — In-depth breakdown of every topic"
+    }
+    sum_type = st.radio(
+        "Select summary style:",
+        ["executive", "bullet_points", "detailed"],
+        format_func=lambda k: sum_type_options[k],
+        key="sum_format_radio",
+    )
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 3: Language Selection
+    st.markdown("#### **Step 3: Choose summary language**")
+    st.caption("Select your preferred language for reading the summary.")
+    sum_lang_options = {
+        "en": "🇬🇧 English",
+        "hi": "🇮🇳 हिन्दी (Hindi)",
+        "gu": "🇮🇳 ગુજરાતી (Gujarati)"
+    }
+    sum_lang = st.radio(
+        "Select language:",
+        ["en", "hi", "gu"],
+        format_func=lambda k: sum_lang_options[k],
+        horizontal=True,
+        key="sum_lang_radio",
+    )
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    if st.button("✨ Create Summary", type="primary", use_container_width=True, key="btn_gen_summary"):
         target_doc_id = None
         target_filename = ""
         if sum_file:
@@ -1375,53 +1419,76 @@ with tab_summarize:
 # =========================================================
 
 with tab_compare:
-    st.markdown("### ⚖️ Cross-Document Comparison")
-    st.caption("Upload two documents directly to compare requirements, terms, budgets, and key differences.")
+    st.markdown("### ⚖️ Document Comparison")
+    st.caption("Compare two documents side-by-side to find differences in prices, clauses, dates, and requirements.")
 
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        st.markdown("#### 📄 Document A (Base Document)")
-        file_a = st.file_uploader(
-            "Upload Document A (PDF, Word, Excel, PPTX, TXT):",
-            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
-            key="comp_direct_file_a",
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+    # Step 1: First Document
+    st.markdown("#### **Step 1: Choose the first document (Original / Version 1)**")
+    st.caption("Upload the first document or baseline file.")
+    file_a = st.file_uploader(
+        "Upload First Document (PDF, Word, Excel, PPTX, TXT):",
+        type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+        key="comp_direct_file_a",
+    )
+    use_active_doc_a = False
+    if st.session_state.active_doc_id and not file_a:
+        active_name = next(
+            (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+            "Active Document"
         )
-        use_active_doc_a = False
-        if st.session_state.active_doc_id and not file_a:
-            active_name = next(
-                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
-                "Active Document"
-            )
-            use_active_doc_a = st.checkbox(
-                f"⚡ Use active chat document as Doc A: **{active_name}**",
-                value=False,
-                key="comp_use_active_a_check",
-            )
-
-    with col_c2:
-        st.markdown("#### 📄 Document B (Comparison Target)")
-        file_b = st.file_uploader(
-            "Upload Document B (PDF, Word, Excel, PPTX, TXT):",
-            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
-            key="comp_direct_file_b",
+        use_active_doc_a = st.checkbox(
+            f"⚡ Use active chat document as First Document: **{active_name}**",
+            value=False,
+            key="comp_use_active_a_check",
         )
 
-    col_f1, col_f2 = st.columns([3, 1])
-    with col_f1:
-        focus = st.text_input(
-            "Specific Focus Area (Optional)",
-            value="Differences in budget, requirements, deadlines, and deliverables",
-            key="comp_focus_input",
-        )
-    with col_f2:
-        comp_lang = st.selectbox(
-            "Comparison Language",
-            ["en", "hi", "gu"],
-            format_func=lambda x: {"en": "English", "hi": "हिन्दी (Hindi)", "gu": "ગુજરાતી (Gujarati)"}[x],
-            key="comp_lang_select",
-        )
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    if st.button("⚖️ Compare Documents", type="primary", key="btn_compare_docs"):
+    # Step 2: Second Document
+    st.markdown("#### **Step 2: Choose the second document (New / Version 2)**")
+    st.caption("Upload the revised or second document you want to compare against.")
+    file_b = st.file_uploader(
+        "Upload Second Document (PDF, Word, Excel, PPTX, TXT):",
+        type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+        key="comp_direct_file_b",
+    )
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 3: Focus Areas
+    st.markdown("#### **Step 3: What should the AI focus on? (Optional)**")
+    st.caption("Mention specific areas of interest (e.g., pricing, deadlines, scope, penalty clauses).")
+    focus = st.text_input(
+        "Focus area:",
+        value="Differences in budget, payment terms, deadlines, and deliverables",
+        key="comp_focus_input",
+    )
+
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 4: Language Selection
+    st.markdown("#### **Step 4: Choose comparison language**")
+    st.caption("Select your preferred language for the comparison report.")
+    comp_lang_options = {
+        "en": "🇬🇧 English",
+        "hi": "🇮🇳 हिन्दी (Hindi)",
+        "gu": "🇮🇳 ગુજરાતી (Gujarati)"
+    }
+    comp_lang = st.radio(
+        "Select language:",
+        ["en", "hi", "gu"],
+        format_func=lambda k: comp_lang_options[k],
+        horizontal=True,
+        key="comp_lang_radio",
+    )
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    if st.button("⚖️ Compare Both Documents", type="primary", use_container_width=True, key="btn_compare_docs"):
         doc_a_id = None
         doc_b_id = None
 
@@ -1462,38 +1529,53 @@ with tab_compare:
 # =========================================================
 
 with tab_extract:
-    st.markdown("### 📊 Structured Information Extraction")
-    st.caption("Upload a document directly to extract key entities, financial numbers, milestone deadlines, and tables into structured JSON.")
+    st.markdown("### 📊 Extract Key Information")
+    st.caption("Quickly extract financial figures, due dates, milestones, and names from any document into clean tables.")
 
-    col_ext_up, col_ext_opt = st.columns([3, 2])
-    with col_ext_up:
-        ext_file = st.file_uploader(
-            "📁 Upload Document for Structured Extraction (PDF, Word, Excel, CSV, PPTX, TXT):",
-            type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
-            key="extract_direct_file_uploader",
-            help="Drag and drop or browse the specific document you want to extract structured data from.",
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
+    # Step 1: Document Selection
+    st.markdown("#### **Step 1: Choose your document**")
+    st.caption("Upload the document you want to extract information from.")
+    ext_file = st.file_uploader(
+        "Upload document (PDF, Word, Excel, PowerPoint, or Text):",
+        type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "json"],
+        key="extract_direct_file_uploader",
+        help="Drag and drop or browse the specific document you want to extract data from.",
+    )
+    use_active_doc_ext = False
+    if st.session_state.active_doc_id and not ext_file:
+        active_name = next(
+            (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
+            "Active Document"
         )
-        use_active_doc_ext = False
-        if st.session_state.active_doc_id and not ext_file:
-            active_name = next(
-                (d["filename"] for d in documents if d["document_id"] == st.session_state.active_doc_id),
-                "Active Document"
-            )
-            use_active_doc_ext = st.checkbox(
-                f"⚡ Or extract from currently active chat document: **{active_name}**",
-                value=False,
-                key="extract_use_active_check",
-            )
-
-    with col_ext_opt:
-        ext_type = st.selectbox(
-            "Extraction Schema",
-            ["full_schema", "financials", "dates_deadlines", "key_entities"],
-            format_func=lambda x: x.replace("_", " ").title(),
-            key="extract_schema_select",
+        use_active_doc_ext = st.checkbox(
+            f"⚡ Or extract from current document in chat: **{active_name}**",
+            value=False,
+            key="extract_use_active_check",
         )
 
-    if st.button("🔍 Extract Structured Data", type="primary", key="btn_extract_data"):
+    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 2: Information Type Selection
+    st.markdown("#### **Step 2: What information would you like to find?**")
+    st.caption("Select what data the AI should focus on finding.")
+    ext_type_options = {
+        "full_schema": "📋 Complete Summary & Key Details — Everything important (Totals, dates, names)",
+        "financials": "💰 Financial Numbers & Amounts — Invoices, prices, taxes, and totals",
+        "dates_deadlines": "📅 Dates, Deadlines & Milestones — Due dates, renewal schedules, and terms",
+        "key_entities": "🏢 Names, People & Organizations — Parties, companies, and roles",
+    }
+    ext_type = st.radio(
+        "Select information to extract:",
+        ["full_schema", "financials", "dates_deadlines", "key_entities"],
+        format_func=lambda k: ext_type_options[k],
+        key="extract_schema_radio",
+    )
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    if st.button("🔍 Find & Extract Information", type="primary", use_container_width=True, key="btn_extract_data"):
         target_doc_id = None
         target_filename = ""
         if ext_file:
