@@ -9,10 +9,12 @@ from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+import os
+import gc
 from dotenv import load_dotenv
 
 load_dotenv()
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 from app.core.loader import load_document
 from app.core.chunker import chunk_text
@@ -212,6 +214,7 @@ def upload_document(file: UploadFile = File(...)):
             language="en",
         )
 
+        gc.collect()
     except Exception as e:
         if dest.exists():
             try:

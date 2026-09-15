@@ -13,10 +13,12 @@ for i in {1..30}; do
     sleep 1
 done
 
-echo "=== Starting DocMind AI Frontend (Streamlit on port 7860) ==="
+PORT="${PORT:-7860}"
+echo "=== Starting DocMind AI Frontend (Streamlit on port $PORT) ==="
 exec streamlit run frontend/streamlit_app.py \
-    --server.port=7860 \
+    --server.port=$PORT \
     --server.address=0.0.0.0 \
     --server.headless=true \
     --server.enableCORS=false \
-    --server.enableXsrfProtection=false
+    --server.enableXsrfProtection=false \
+    --server.maxUploadSize=200
