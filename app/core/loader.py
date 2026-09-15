@@ -13,6 +13,9 @@ import pandas as pd
 from google import genai
 from google.genai import types
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from app.core.resilience import generate_with_cascade
 
 logger = logging.getLogger("docmind.loader")
