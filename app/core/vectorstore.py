@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any
 import chromadb
+from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 
 from app.core.embedder import Embedder
@@ -13,7 +14,10 @@ class VectorStore:
         persist_dir: str = "app/data/vectorstore",
         collection_name: str = "documents",
     ):
-        self.client = chromadb.PersistentClient(path=persist_dir)
+        self.client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
         self.collection_name = collection_name
         self.collection = self.client.get_or_create_collection(
             name=collection_name,

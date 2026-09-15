@@ -3,12 +3,20 @@ set -e
 
 echo "=== Starting DocMind AI Backend (FastAPI on port 8000) ==="
 python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 &
+FASTAPI_PID=$!
 
 echo "=== Waiting for FastAPI backend to initialize... ==="
-for i in {1..30}; do
-    if curl -s http://127.0.0.1:8000/health > /dev/null; then
-        echo "=== FastAPI backend is healthy! ==="
+READY=0
+for i in {1..35}; do
+    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+        echo "=== FastAPI backend is healthy! (PID: $FASTAPI_PID) ==="
+        READY=1
         break
+    fi
+    if ! kill -0 $FASTAPI_PID 2>/dev/null; then
+        echo "=== ERROR: FastAPI process exited unexpectedly! ==="
+        wait $FASTAPI_PID
+        exit 1
     fi
     sleep 1
 done

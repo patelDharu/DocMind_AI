@@ -11,10 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import os
 import gc
+import logging
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv()
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 from app.core.loader import load_document
 from app.core.chunker import chunk_text
