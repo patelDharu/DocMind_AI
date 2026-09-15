@@ -179,12 +179,12 @@ class DocumentLoader:
                     if raw_text.strip():
                         page_content_parts.append(raw_text.strip())
 
-                    tables = page.extract_tables()
-                    if tables:
-                        for t_idx, table in enumerate(tables, start=1):
-                            md_table = DocumentLoader._format_table_as_markdown(table)
-                            if md_table:
-                                page_content_parts.append(f"\n[Table {t_idx} on Page {page_idx}]\n{md_table}\n")
+                        tables = page.extract_tables()
+                        if tables:
+                            for t_idx, table in enumerate(tables, start=1):
+                                md_table = DocumentLoader._format_table_as_markdown(table)
+                                if md_table:
+                                    page_content_parts.append(f"\n[Table {t_idx} on Page {page_idx}]\n{md_table}\n")
 
                     full_page_text = "\n\n".join(page_content_parts).strip()
                     if full_page_text:
@@ -206,22 +206,24 @@ class DocumentLoader:
         if total_chars < 50:
             try:
                 reader = pypdf.PdfReader(file_path)
-                pypdf_docs = []
-                for p_idx, page in enumerate(reader.pages, start=1):
-                    p_text = page.extract_text() or ""
-                    if p_text.strip():
-                        pypdf_docs.append({
-                            "text": p_text.strip(),
-                            "metadata": {
-                                "source": filename,
-                                "page": p_idx,
-                                "char_count": len(p_text.strip()),
-                                "has_tables": False,
-                            }
-                        })
-                if sum(len(d["text"]) for d in pypdf_docs) > total_chars:
-                    docs = pypdf_docs
-                    total_chars = sum(len(d["text"]) for d in docs)
+                p0_text = (reader.pages[0].extract_text() or "").strip() if reader.pages else ""
+                if p0_text:
+                    pypdf_docs = []
+                    for p_idx, page in enumerate(reader.pages, start=1):
+                        p_text = page.extract_text() or ""
+                        if p_text.strip():
+                            pypdf_docs.append({
+                                "text": p_text.strip(),
+                                "metadata": {
+                                    "source": filename,
+                                    "page": p_idx,
+                                    "char_count": len(p_text.strip()),
+                                    "has_tables": False,
+                                }
+                            })
+                    if sum(len(d["text"]) for d in pypdf_docs) > total_chars:
+                        docs = pypdf_docs
+                        total_chars = sum(len(d["text"]) for d in docs)
             except Exception as e:
                 logger.warning(f"pypdf fallback failed on {filename}: {e}")
 
