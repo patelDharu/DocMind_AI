@@ -17,17 +17,24 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
-from app.core.auth import init_user_db, register_user, authenticate_user
+from app.core.auth import (
+    init_user_db,
+    register_user,
+    authenticate_user,
+    get_user_chat_sessions,
+    save_user_chat_session,
+    delete_user_chat_session,
+    clear_all_user_chat_sessions,
+)
 
 API_URL = "http://127.0.0.1:8000"
 
 
-def get_chat_sessions_file() -> Path:
-    """Returns user-scoped chat sessions file path or fallback default."""
+def get_current_user_email() -> str:
+    """Returns the email address of the currently authenticated user."""
     if st.session_state.get("current_user"):
-        u_id = st.session_state.current_user.get("user_id", "default")
-        return ROOT_DIR / "app" / "data" / f"chat_sessions_{u_id}.json"
-    return ROOT_DIR / "app" / "data" / "chat_sessions.json"
+        return st.session_state.current_user.get("email", "").strip().lower()
+    return ""
 
 
 chat_bar_path = str(ROOT_DIR / "frontend" / "components" / "chat_bar")
@@ -310,46 +317,33 @@ def clean_legacy_html(text: str) -> str:
 
 
 def load_chat_sessions():
-    """Load all saved chat sessions from disk, sorted newest first."""
-    s_file = get_chat_sessions_file()
-    if not s_file.exists():
-        # Fallback to shared sessions file if user-specific does not exist yet
-        fallback = ROOT_DIR / "app" / "data" / "chat_sessions.json"
-        if fallback.exists():
-            s_file = fallback
-        else:
-            return []
-    try:
-        with open(s_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                for session in data:
-                    for m in session.get("messages", []):
-                        if "content" in m:
-                            m["content"] = clean_legacy_html(m["content"])
-                return data
-    except Exception:
-        pass
-    return []
+    """Load all saved chat sessions strictly for the current user's email from database."""
+    email = get_current_user_email()
+    if not email:
+        return []
+    sessions = get_user_chat_sessions(email)
+    for session in sessions:
+        for m in session.get("messages", []):
+            if "content" in m:
+                m["content"] = clean_legacy_html(m["content"])
+    return sessions
 
 
 def save_chat_sessions(sessions):
-    """Save chat sessions list to disk."""
-    s_file = get_chat_sessions_file()
-    try:
-        s_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(s_file, "w", encoding="utf-8") as f:
-            json.dump(sessions, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving chat sessions: {e}")
+    """Save chat sessions list to database for the current user's email."""
+    email = get_current_user_email()
+    if not email:
+        return
+    for s in sessions:
+        save_user_chat_session(email, s)
 
 
 def save_current_chat_session():
-    """Persist current active session to disk if it has messages."""
-    if not st.session_state.get("messages"):
+    """Persist current active session to database strictly under current user's email."""
+    email = get_current_user_email()
+    if not email or not st.session_state.get("messages"):
         return
 
-    sessions = load_chat_sessions()
     sess_id = st.session_state.get("current_session_id")
     if not sess_id:
         sess_id = str(uuid.uuid4())[:8]
@@ -358,12 +352,17 @@ def save_current_chat_session():
     # Derive title from first user message
     first_q = next((m["content"] for m in st.session_state.messages if m["role"] == "user"), "New Conversation")
     clean_title = first_q.replace("🎤 ", "").strip()
-    if len(clean_title) > 30:
-        clean_title = clean_title[:30] + "..."
+    if len(clean_title) > 32:
+        clean_title = clean_title[:32] + "..."
 
     now_str = datetime.now().strftime("%d %b, %H:%M")
 
-    existing_idx = next((i for i, s in enumerate(sessions) if s.get("id") == sess_id), None)
+    # Retain existing custom title if one was already set
+    existing_sessions = get_user_chat_sessions(email)
+    existing = next((s for s in existing_sessions if s.get("id") == sess_id), None)
+    if existing and existing.get("title") and existing.get("title") != "New Conversation":
+        clean_title = existing.get("title")
+
     session_data = {
         "id": sess_id,
         "title": clean_title,
@@ -373,18 +372,7 @@ def save_current_chat_session():
         "messages": st.session_state.get("messages", []),
     }
 
-    if existing_idx is not None:
-        orig_title = sessions[existing_idx].get("title")
-        if orig_title and orig_title != "New Conversation":
-            session_data["title"] = orig_title
-        sessions[existing_idx] = session_data
-        # Keep most recently updated session at top
-        sessions.insert(0, sessions.pop(existing_idx))
-    else:
-        sessions.insert(0, session_data)
-
-    sessions = sessions[:30]
-    save_chat_sessions(sessions)
+    save_user_chat_session(email, session_data)
 
 
 def start_new_chat():
@@ -400,23 +388,15 @@ def start_new_chat():
 
 def clear_current_chat():
     """Completely clear current chat messages, active document targeting, and reset state."""
+    email = get_current_user_email()
+    sess_id = st.session_state.get("current_session_id")
+    if email and sess_id:
+        delete_user_chat_session(email, sess_id)
     st.session_state.messages = []
     st.session_state.active_doc_id = None
     st.session_state.selected_document_ids = []
     st.session_state.audio_cache = {}
     st.session_state.last_chat_bar_msg_id = None
-    sess_id = st.session_state.get("current_session_id")
-    if sess_id:
-        sessions = load_chat_sessions()
-        for s in sessions:
-            if s.get("id") == sess_id:
-                s["messages"] = []
-                s["active_doc_id"] = None
-                s["selected_document_ids"] = []
-                s["title"] = "New Conversation"
-                s["updated_at"] = datetime.now().strftime("%d %b, %H:%M")
-                break
-        save_chat_sessions(sessions)
 
 
 def switch_to_chat_session(session_id: str):
@@ -434,10 +414,10 @@ def switch_to_chat_session(session_id: str):
 
 
 def delete_chat_session(session_id: str):
-    """Delete a chat session from history."""
-    sessions = load_chat_sessions()
-    sessions = [s for s in sessions if s.get("id") != session_id]
-    save_chat_sessions(sessions)
+    """Delete a chat session from history for the current user."""
+    email = get_current_user_email()
+    if email and session_id:
+        delete_user_chat_session(email, session_id)
     if st.session_state.get("current_session_id") == session_id:
         start_new_chat()
 
@@ -757,9 +737,26 @@ if not st.session_state.get("authenticated", False):
 # =========================================================
 
 curr_user = st.session_state.get("current_user") or {}
+curr_email = curr_user.get("email", "").strip().lower()
 u_name = curr_user.get("name", "DocMind User")
 u_email = curr_user.get("email", "")
 u_init = u_name[0].upper() if u_name else "U"
+
+# Synchronize user chat state whenever user logs in or switches accounts
+if st.session_state.get("active_email") != curr_email:
+    st.session_state.active_email = curr_email
+    user_sessions = load_chat_sessions()
+    if user_sessions:
+        latest = user_sessions[0]
+        st.session_state.current_session_id = latest["id"]
+        st.session_state.messages = latest.get("messages", [])
+        st.session_state.selected_document_ids = latest.get("selected_document_ids", [])
+        st.session_state.active_doc_id = latest.get("active_doc_id")
+    else:
+        st.session_state.current_session_id = str(uuid.uuid4())[:8]
+        st.session_state.messages = []
+        st.session_state.selected_document_ids = []
+        st.session_state.active_doc_id = None
 
 st.sidebar.markdown(f"""
 <div style="display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px;">
@@ -782,37 +779,61 @@ with c_nav1:
         st.rerun()
 with c_nav2:
     if st.button("🚪 Sign Out", key="sidebar_signout_btn", use_container_width=True, help="Sign out of your account"):
+        save_current_chat_session()
         st.session_state.authenticated = False
         st.session_state.current_user = None
+        st.session_state.active_email = None
         st.session_state.messages = []
         st.session_state.current_session_id = str(uuid.uuid4())[:8]
         st.rerun()
 
-st.sidebar.title("📚 DocMind AI")
-st.sidebar.caption("Smart Document Assistant & Studio")
-
 # ---------------------------------------------------------
 # GPT-Style: Recent Chats / Conversation History
 # ---------------------------------------------------------
+st.sidebar.markdown("""
+<div style="display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px 0;">
+    <span style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.6px;">💬 Chat History</span>
+</div>
+""", unsafe_allow_html=True)
+
 saved_sessions = load_chat_sessions()
 if saved_sessions:
-    with st.sidebar.expander(f"💬 Recent Chats ({len(saved_sessions)})", expanded=True):
-        for sess in saved_sessions:
-            s_id = sess.get("id", "")
-            is_active = (s_id == st.session_state.get("current_session_id"))
-            s_title = sess.get("title", "Conversation")
+    for sess in saved_sessions[:25]:
+        s_id = sess.get("id", "")
+        is_active = (s_id == st.session_state.get("current_session_id"))
+        s_title = sess.get("title", "New Conversation")
+        if len(s_title) > 28:
+            s_display_title = s_title[:28] + "..."
+        else:
+            s_display_title = s_title
 
-            c_hist1, c_hist2 = st.columns([5, 1])
-            with c_hist1:
-                icon = "🟢 " if is_active else "💬 "
-                if st.button(f"{icon}{s_title}", key=f"hist_btn_{s_id}", use_container_width=True, help=f"Updated: {sess.get('updated_at', '')}"):
-                    switch_to_chat_session(s_id)
-                    st.rerun()
-            with c_hist2:
-                if st.button("✕", key=f"del_btn_{s_id}", help="Delete this chat"):
-                    delete_chat_session(s_id)
-                    st.rerun()
+        c_hist1, c_hist2 = st.sidebar.columns([5, 1])
+        with c_hist1:
+            icon = "🟢 " if is_active else "💬 "
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(
+                f"{icon}{s_display_title}",
+                key=f"hist_btn_{s_id}",
+                use_container_width=True,
+                type=btn_type,
+                help=f"{s_title}\nUpdated: {sess.get('updated_at', '')}",
+            ):
+                switch_to_chat_session(s_id)
+                st.rerun()
+        with c_hist2:
+            if st.button("✕", key=f"del_btn_{s_id}", help=f"Delete '{s_title}'"):
+                delete_chat_session(s_id)
+                st.rerun()
+else:
+    st.sidebar.markdown("""
+    <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px 10px; text-align: center; margin: 4px 0 12px 0;">
+        <div style="font-size: 16px; margin-bottom: 2px;">💭</div>
+        <div style="font-size: 12px; font-weight: 600; color: #475569;">No previous chats</div>
+        <div style="font-size: 10.5px; color: #94a3b8; margin-top: 2px;">Your conversations will appear here.</div>
+    </div>
+    """, unsafe_allow_html=True)
 
+st.sidebar.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 # 2. Document Search Scope Selection
