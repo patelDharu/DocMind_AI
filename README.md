@@ -10,7 +10,7 @@
 
 > **DocMind AI** is an intelligent AI Document Assistant that transforms complex documents (PDFs, scanned images, contracts, Word docs, Excel sheets) into clear, interactive knowledge.
 > 
-> It automatically flags upcoming deadlines and action items, answers your questions with page-accurate citations, speaks answers aloud in **English, Hindi, and Gujarati**, and gives every user private, **ChatGPT-style chat history** tied to their email.
+> It automatically flags upcoming deadlines and action items, answers questions with page-accurate citations, speaks answers aloud in **English, Hindi, and Gujarati**, and gives every user private, **ChatGPT-style chat history** tied to their email.
 
 ---
 
@@ -40,7 +40,7 @@ Try the live deployed version on Render:
 
 ### 1. 🔍 Proactive Action & Deadline Detection
 As soon as you upload a document, DocMind AI scans the text in the background and highlights:
-- 📌 **Does this need action?** (Yes/No)
+- 📌 **Does this need action?** (Yes / No)
 - ⏰ **Deadline**: Due dates and timeframes
 - ⚠️ **Consequences**: Late fees, penalties, legal risks
 - 📋 **Next Steps**: Step-by-step checklist of what to do
@@ -48,16 +48,16 @@ As soon as you upload a document, DocMind AI scans the text in the background an
 ### 2. 📚 Universal Multi-Format Document Ingestion
 Upload virtually any file type:
 - **PDFs**: Digital PDFs, scanned documents, and image-based PDFs
-- **Word**: .docx, .doc
-- **Spreadsheets**: .xlsx, .xls, .csv, .tsv (automatically formats tables into readable markdown)
-- **Presentations**: .pptx, .ppt
-- **Text & Code**: .txt, .md, .rtf, .log, .json, .yaml, .xml
-- **Images**: .png, .jpg, .jpeg, .webp
+- **Word**: `.docx`, `.doc`
+- **Spreadsheets**: `.xlsx`, `.xls`, `.csv`, `.tsv` (automatically formats tables into readable markdown)
+- **Presentations**: `.pptx`, `.ppt`
+- **Text & Code**: `.txt`, `.md`, `.rtf`, `.log`, `.json`, `.yaml`, `.xml`
+- **Images**: `.png`, `.jpg`, `.jpeg`, `.webp`
 
 ### 3. 💬 ChatGPT-Style Workspace & Private Chat History
-- **Modern Search Capsule**: Clean input bar with attachment (+) menu, voice recording, and trilingual language toggle.
+- **Modern Search Capsule**: Clean input bar with attachment `(+)` menu, voice recording, and trilingual language toggle.
 - **Private History by Email**: Conversations are saved to an isolated SQLite database keyed to your email. User A cannot see User B's chats.
-- **Sidebar Management**: One-click switching between previous conversations, active chat indicator (🟢), and instant chat deletion (✕).
+- **Sidebar Management**: One-click switching between previous conversations, active chat indicator (`🟢`), and instant chat deletion (`✕`).
 
 ### 4. 🎙️ Trilingual Voice Input & Audio Readouts
 - Speak your questions naturally in **English**, **हिन्दी (Hindi)**, or **ગુજરાતી (Gujarati)**.
@@ -65,7 +65,7 @@ Upload virtually any file type:
 
 ### 5. ✍️ Document Studio (AI Document Editor & Export)
 - Edit or append new sections to existing documents using natural language instructions.
-- Export modified documents on the fly as professionally styled **.docx** or **.pdf** files.
+- Export modified documents on the fly as professionally styled **`.docx`** or **`.pdf`** files.
 
 ### 6. ⚖️ Multi-Document Comparison
 - Select two or more documents to compare terms, pricing, clauses, and differences side-by-side in structured comparison tables.
@@ -77,32 +77,39 @@ Upload virtually any file type:
 
 ## 🛠️ Architecture & Tech Stack
 
-`
-DocMind AI Architecture
-┌─────────────────────────────────────────────────────────────┐
-│                 STREAMLIT FRONTEND (PORT 7860)              │
-│   • ChatGPT-Style Sidebar       • Unified Search Capsule     │
-│   • Email-Wise History          • Voice Audio Recording      │
-│   • Trilingual Voice Readouts   • Document Studio Interface  │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTP / REST API
-┌──────────────────────────────▼──────────────────────────────┐
-│                  FASTAPI BACKEND (PORT 8000)                │
-│   • /upload: Ingestion Pipeline • /ask: Hybrid RAG Search   │
-│   • /ask-voice: Whisper/Gemini  • /document/edit: Studio    │
-│   • /summarize & /compare       • /health: Service Monitor  │
-└──────┬───────────────────────┬───────────────────────┬──────┘
-       │                       │                       │
-┌──────▼──────┐         ┌──────▼──────┐         ┌──────▼──────┐
-│  EMBEDDINGS │         │   STORAGE   │         │     LLM     │
-│  & RETRIEVAL│         │  & SESSIONS │         │  REASONING  │
-│ • Gemini    │         │ • SQLite DB │         │ • Gemini    │
-│   Embeddings│         │ • ChromaDB  │         │   2.5 Flash │
-│ • BM25 Rank │         │ • Users &   │         │ • Proactive │
-│ • Hybrid    │         │   Sessions  │         │   Action    │
-│   Reranker  │         │   Storage   │         │   Detector  │
-└─────────────┘         └─────────────┘         └─────────────┘
-`
+### System Flowchart
+
+```mermaid
+flowchart TD
+    subgraph UI["💻 Frontend Layer (Streamlit)"]
+        A["🎨 ChatGPT-Style Searchbar & Capsule"]
+        B["💬 Private Email-Wise Chat History"]
+        C["🎙️ Trilingual Voice Input & Audio"]
+    end
+
+    subgraph API["⚡ API Backend (FastAPI)"]
+        D["🚀 REST Orchestrator"]
+        E["✂️ Pure Python Chunker (0MB Overhead)"]
+        F["📄 Multi-Format Loader & Vision OCR"]
+    end
+
+    subgraph Models["🧠 AI Intelligence Cascade (Google Gemini)"]
+        G["⚡ Gemini 2.5 Flash (Q&A & Studio)"]
+        H["⏰ Proactive Deadline & Action Scanner"]
+        I["📐 Gemini Vector Embeddings"]
+    end
+
+    subgraph Data["💾 Persistence Layer"]
+        J[("🗄️ SQLite Database (Users & Chat Sessions)")]
+        K[("🔍 ChromaDB & BM25 (Hybrid Vector Index)")]
+    end
+
+    UI -->|REST API / HTTP| API
+    API --> Models
+    API --> Data
+```
+
+### Component Details
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
@@ -111,7 +118,7 @@ DocMind AI Architecture
 | **AI Models** | Google Gemini 2.5 Flash / Flash Lite | Multimodal Vision OCR, RAG question answering, proactive analysis |
 | **Vector DB** | ChromaDB + Rank-BM25 | Hybrid dense + sparse retrieval for page-accurate search |
 | **Chunking** | Pure Python Recursive Chunker | Ultra-lightweight text chunking (saves ~440 MB RAM) |
-| **User Data** | SQLite (users.db) | User authentication (salted PBKDF2 hashes) & private chat history |
+| **User Data** | SQLite (`users.db`) | User authentication (salted PBKDF2 hashes) & private chat history |
 | **Speech** | Web Audio API / Gemini / gTTS | Voice transcription & trilingual audio playback |
 | **Deployment** | Docker + Linux + Render Web Service | Containerized cloud hosting with dynamic port binding |
 
@@ -127,27 +134,25 @@ DocMind AI Architecture
 
 ### Method 1: Windows 1-Click Launch (Easiest)
 
-1. Double-click **
-un_docmind.bat** (or right-click **
-un_docmind.ps1** and select *Run with PowerShell*).
+1. Double-click **`run_docmind.bat`** (or right-click **`run_docmind.ps1`** and select *Run with PowerShell*).
 2. The launcher will automatically:
    - Create the Python virtual environment
    - Install all required libraries
    - Start both the FastAPI backend and Streamlit frontend
-   - Open your browser at http://localhost:7860
+   - Open your browser at `http://localhost:7860`
 
 ---
 
 ### Method 2: Manual Terminal / VS Code Setup
 
 #### 1. Clone the Repository
-`ash
+```bash
 git clone https://github.com/patelDharu/DocMind_AI.git
 cd DocMind_AI
-`
+```
 
 #### 2. Create and Activate Virtual Environment
-`ash
+```bash
 # Windows:
 python -m venv venv
 .\venv\Scripts\activate
@@ -155,40 +160,40 @@ python -m venv venv
 # macOS / Linux:
 python3 -m venv venv
 source venv/bin/activate
-`
+```
 
 #### 3. Install Dependencies
-`ash
+```bash
 pip install -r requirements.txt
-`
+```
 
 #### 4. Configure Your API Key
-Create a .env file in the project root:
-`env
+Create a `.env` file in the project root:
+```env
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-flash-lite-latest
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-`
+```
 
 #### 5. Launch the Application
 
 **Terminal 1 — Start the Backend:**
-`ash
+```bash
 python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 --reload
-`
+```
 
 **Terminal 2 — Start the Frontend:**
-`ash
+```bash
 streamlit run frontend/streamlit_app.py --server.port=7860
-`
+```
 
-Open your browser at **http://localhost:7860**!
+Open your browser at **`http://localhost:7860`**!
 
 ---
 
 ## 📁 Project Structure
 
-`
+```text
 DocMind_AI/
 ├── app/
 │   ├── api/
@@ -216,7 +221,7 @@ DocMind_AI/
 ├── run_docmind.ps1              # 1-Click Windows PowerShell launcher
 ├── requirements.txt             # Python package dependencies
 └── README.md                    # Project documentation
-`
+```
 
 ---
 
@@ -224,9 +229,9 @@ DocMind_AI/
 
 Contributions, feedback, and feature requests are welcome!
 1. Fork the repository
-2. Create your feature branch (git checkout -b feature/AmazingFeature)
-3. Commit your changes (git commit -m 'Add some AmazingFeature')
-4. Push to the branch (git push origin feature/AmazingFeature)
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
 ---
