@@ -1,250 +1,244 @@
-# 📄 DocMind AI — Trilingual Document Intelligence & Studio
+# 📄 DocMind AI — Your Smart Personal Document Assistant
 
 [![Live Demo](https://img.shields.io/badge/Live_Demo-DocMind_AI-4f46e5?style=for-the-badge&logo=render&logoColor=white)](https://docmind-ai-dc2h.onrender.com)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-ff4b4b?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![Google Gemini](https://img.shields.io/badge/Google_Gemini-2.5_Flash-4285f4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
-[![SQLite](https://img.shields.io/badge/SQLite-Database-003b57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Web_UI-ff4b4b?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Google Gemini](https://img.shields.io/badge/Google_Gemini-AI_Powered-4285f4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
 
-> **DocMind AI** is an intelligent AI Document Assistant that transforms complex documents (PDFs, scanned images, contracts, Word docs, Excel sheets) into clear, interactive knowledge.
-> 
-> It automatically flags upcoming deadlines and action items, answers questions with page-accurate citations, speaks answers aloud in **English, Hindi, and Gujarati**, and gives every user private, **ChatGPT-style chat history** tied to their email.
+> **DocMind AI** makes reading and working with long, boring, or complicated documents easy for everyone.  
+> Upload any file (PDF, Word, Excel, scanned bills, or images), ask questions in everyday words, and get instant answers with page numbers to prove it. You can even talk to it in **English, Hindi, or Gujarati** and listen to the reply!
 
 ---
 
-## 🌐 Live Web Application
+## 🌐 Try It Live!
 
-Try the live deployed version on Render:
-👉 **[https://docmind-ai-dc2h.onrender.com](https://docmind-ai-dc2h.onrender.com)**
+You can test the application right in your browser without installing anything:  
+👉 **[Open Live Demo on Render](https://docmind-ai-dc2h.onrender.com)**
 
-* **Free Demo Login**: Click the **⚡ Free Demo Sign In** button to test instantly.
-* **Or Register Your Account**: Enter your email to have your own private chat history saved automatically.
-
----
-
-## 💡 Why DocMind AI? (The Problem & Solution)
-
-| The Common Problem | How DocMind AI Solves It |
-| :--- | :--- |
-| **Complex Legal & Technical Jargon**: Non-technical people (common citizens, doctors, business owners) struggle to read 20-page legal contracts and tax notices. | DocMind explains everything in plain, easy language with clear bullet points. |
-| **Missed Deadlines & Penalties**: Important due dates and penalty clauses get buried in fine print. | **Proactive Action Engine**: Scans documents immediately upon upload and warns you about deadlines, action steps, and penalties without you having to ask. |
-| **Scanned Image PDFs with Zero Text**: Traditional tools fail on scanned bills and screenshot PDFs. | **Multimodal Vision OCR**: Powered by Google Gemini Vision to read and transcribe even rasterized images, screenshots, and tables. |
-| **Language Barrier**: Many people prefer Hindi or Gujarati over English. | **Trilingual Voice & Text**: Ask questions in English, Hindi (हिन्दी), or Gujarati (ગુજરાતી) — via typing or voice — and listen to spoken answers. |
-| **Lost Chat History**: Users lose their past work when refreshing or closing the browser. | **Email-Specific History**: Dedicated SQLite storage keeps conversations organized by email ID in a modern **ChatGPT-style sidebar**. |
+- **Instant Test**: Click **⚡ Free Demo Sign In** to try it immediately.
+- **Save Your Work**: Register with your email to keep your personal documents and chat history private and saved forever.
 
 ---
 
-## 🌟 Key Features
+## 🎯 What Problem Does This Solve?
 
-### 1. 🔍 Proactive Action & Deadline Detection
-As soon as you upload a document, DocMind AI scans the text in the background and highlights:
-- 📌 **Does this need action?** (Yes / No)
-- ⏰ **Deadline**: Due dates and timeframes
-- ⚠️ **Consequences**: Late fees, penalties, legal risks
-- 📋 **Next Steps**: Step-by-step checklist of what to do
+Reading through 50-page legal contracts, company annual reports, medical reports, or tax notices is exhausting:
+- Important **due dates and late fees** get hidden in tiny fine print.
+- **Scanned bills or screenshots** can't be searched using normal computer search (`Ctrl + F`).
+- Many people prefer understanding documents in their native language like **Hindi** or **Gujarati**.
+- When you need to add a clause or update a number in a document, you usually have to retype or reformat the whole thing.
 
-### 2. 📚 Universal Multi-Format Document Ingestion
-Upload virtually any file type:
-- **PDFs**: Digital PDFs, scanned documents, and image-based PDFs
-- **Word**: `.docx`, `.doc`
-- **Spreadsheets**: `.xlsx`, `.xls`, `.csv`, `.tsv` (automatically formats tables into readable markdown)
+**DocMind AI solves all of this automatically in seconds.**
+
+---
+
+## ✨ What Can DocMind AI Do?
+
+### 1. 💬 Chat with Your Documents (Like ChatGPT for Your Files)
+- Ask questions in plain everyday words (e.g., *"What is the total fee?"*, *"Who signed this contract?"*, *"What are the payment terms?"*).
+- DocMind AI gives you a clear, concise answer.
+- **Zero Guesswork**: Every answer shows clickable **Source Cards** with the exact page number and sentence from your file so you can double-check the facts.
+
+### 2. ⏰ Automatic Deadline & Action Scanner
+- The moment you upload any document, the AI scans it in the background.
+- It immediately warns you:
+  - 📌 **Does this need action?** (Yes / No)
+  - ⏰ **When is the deadline?** (Exact due dates)
+  - ⚠️ **What happens if you miss it?** (Penalties or fees)
+  - 📋 **Checklist**: What steps you should take next.
+
+### 3. 🎙️ Talk and Listen in 3 Languages
+- **Trilingual Support**: English, **हिन्दी (Hindi)**, and **ગુજરાતી (Gujarati)**.
+- Tap the microphone button to ask your question by speaking.
+- Click the **🔊 Listen** button on any answer to hear the AI read it aloud in a natural voice.
+
+### 4. 📊 Extract Tables & Spreadsheets Cleanly
+- Automatically pulls out financial numbers, meeting attendance, dates, and tables from PDFs.
+- Displays them as interactive spreadsheets that you can copy or view on screen.
+
+### 5. ✍️ AI Document Studio (Edit & Export Word / PDF)
+- Need to add new payment terms, an NDA clause, or update inspection numbers?
+- Simply type what you want in plain words (e.g., *"Add a 2-year warranty clause at the end"*).
+- Download the updated document immediately as a professionally formatted **Word (.docx)** or **PDF (.pdf)** file with tables and styles intact!
+
+### 6. ⚖️ Compare Two Documents Side-by-Side
+- Upload two versions of a contract, resume, or report.
+- The AI highlights differences, price changes, and missing terms in a neat comparison table.
+
+### 7. 🔒 Private & Secure for Every User
+- **Private Data Isolation**: Your documents, vector embeddings, and chat history are securely locked to your personal account.
+- Other users cannot see, search, or access your files.
+
+---
+
+## 📂 Supported File Types
+
+DocMind AI can read virtually anything you throw at it:
+- **PDF Documents**: Both digital PDFs and scanned image PDFs (uses Gemini Vision OCR).
+- **Word Files**: `.docx`, `.doc`
+- **Spreadsheets**: `.xlsx`, `.xls`, `.csv`, `.tsv`
 - **Presentations**: `.pptx`, `.ppt`
-- **Text & Code**: `.txt`, `.md`, `.rtf`, `.log`, `.json`, `.yaml`, `.xml`
+- **Text & Notes**: `.txt`, `.md`, `.json`, `.html`, `.log`
 - **Images**: `.png`, `.jpg`, `.jpeg`, `.webp`
 
-### 3. 💬 ChatGPT-Style Workspace & Private Chat History
-- **Modern Search Capsule**: Clean input bar with attachment `(+)` menu, voice recording, and trilingual language toggle.
-- **Private History by Email**: Conversations are saved to an isolated SQLite database keyed to your email. User A cannot see User B's chats.
-- **Sidebar Management**: One-click switching between previous conversations, active chat indicator (`🟢`), and instant chat deletion (`✕`).
-
-### 4. 🎙️ Trilingual Voice Input & Audio Readouts
-- Speak your questions naturally in **English**, **हिन्दी (Hindi)**, or **ગુજરાતી (Gujarati)**.
-- DocMind transcribes your voice, answers the question, and can **read the answer aloud** using high-quality Text-to-Speech (TTS).
-
-### 5. ✍️ Document Studio (AI Document Editor & Export)
-- Edit or append new sections to existing documents using natural language instructions.
-- Export modified documents on the fly as professionally styled **`.docx`** or **`.pdf`** files.
-
-### 6. ⚖️ Multi-Document Comparison
-- Select two or more documents to compare terms, pricing, clauses, and differences side-by-side in structured comparison tables.
-
-### 7. 🛡️ Verifiable Source Citations (No Hallucinations)
-- Every answer includes expandable **source cards** showing the exact source document, page number, and text snippet so you can verify the truth yourself.
-
 ---
 
-## 🛠️ Architecture & Tech Stack
-
-### System Flowchart
+## 🛠️ How It Works (Simple Architecture)
 
 ```mermaid
-flowchart TD
-    subgraph UI["💻 Frontend Layer (Streamlit)"]
-        A["🎨 ChatGPT-Style Searchbar & Capsule"]
-        B["💬 Private Email-Wise Chat History"]
-        C["🎙️ Trilingual Voice Input & Audio"]
-    end
-
-    subgraph API["⚡ API Backend (FastAPI)"]
-        D["🚀 REST Orchestrator"]
-        E["✂️ Pure Python Chunker (0MB Overhead)"]
-        F["📄 Multi-Format Loader & Vision OCR"]
-    end
-
-    subgraph Models["🧠 AI Intelligence Cascade (Google Gemini)"]
-        G["⚡ Gemini 2.5 Flash (Q&A & Studio)"]
-        H["⏰ Proactive Deadline & Action Scanner"]
-        I["📐 Gemini Vector Embeddings"]
-    end
-
-    subgraph Data["💾 Persistence Layer"]
-        J[("🗄️ SQLite Database (Users & Chat Sessions)")]
-        K[("🔍 ChromaDB & BM25 (Hybrid Vector Index)")]
-    end
-
-    UI -->|REST API / HTTP| API
-    API --> Models
-    API --> Data
+flowchart LR
+    A["📄 Upload Document<br/>(PDF, Word, Excel, Image)"] --> B["⚙️ FastAPI Backend<br/>(Extracts Text, Tables & Images)"]
+    B --> C["🧠 AI Engine (Gemini)<br/>(Reads, Understands & Finds Deadlines)"]
+    C --> D["💻 Streamlit Web App<br/>(Clean Chat, Tables, Audio & Word/PDF Download)"]
 ```
 
-### Component Details
-
-| Layer | Technology | Purpose |
-| :--- | :--- | :--- |
-| **Frontend** | Streamlit + Custom HTML/CSS/JS Components | Modern responsive UI, ChatGPT-style sidebar, chat capsule |
-| **Backend API** | FastAPI + Uvicorn | High-performance asynchronous REST endpoints |
-| **AI Models** | Google Gemini 2.5 Flash / Flash Lite | Multimodal Vision OCR, RAG question answering, proactive analysis |
-| **Vector DB** | ChromaDB + Rank-BM25 | Hybrid dense + sparse retrieval for page-accurate search |
-| **Chunking** | Pure Python Recursive Chunker | Ultra-lightweight text chunking (saves ~440 MB RAM) |
-| **User Data** | SQLite (`users.db`) | User authentication (salted PBKDF2 hashes) & private chat history |
-| **Speech** | Web Audio API / Gemini / gTTS | Voice transcription & trilingual audio playback |
-| **Deployment** | Docker + Linux + Render Web Service | Containerized cloud hosting with dynamic port binding |
+1. **Frontend (Streamlit)**: Clean, user-friendly ChatGPT-style interface with private chat history sidebar and voice buttons.
+2. **Backend (FastAPI)**: High-speed API that secures endpoints, handles file uploads, and manages search.
+3. **AI Brain (Google Gemini)**: Powerful AI that answers questions, finds deadlines, and drafts document updates.
+4. **Hybrid Search (ChromaDB + BM25)**: Advanced semantic search that understands meanings and concepts, not just exact keywords.
 
 ---
 
-## 🚀 Quick Start (Run on Your Computer)
+## 🚀 Easy 2-Minute Setup (Run on Your Computer)
 
-### Prerequisites
-- Python 3.10 or 3.11 installed
-- A free **Google Gemini API Key** from [Google AI Studio](https://aistudio.google.com/)
-
----
-
-### Method 1: Windows 1-Click Launch (Easiest)
-
-1. Double-click **`run_docmind.bat`** (or right-click **`run_docmind.ps1`** and select *Run with PowerShell*).
-2. The launcher will automatically:
-   - Create the Python virtual environment
-   - Install all required libraries
-   - Start both the FastAPI backend and Streamlit frontend
-   - Open your browser at `http://localhost:7860`
+### What You Need:
+1. **Python 3.10 or 3.11** installed on your computer.
+2. A free **Google Gemini API Key** (takes 30 seconds at [Google AI Studio](https://aistudio.google.com/)).
 
 ---
 
-### Method 2: Manual Terminal / VS Code Setup
+### Option A: Windows 1-Click Launch (Easiest)
 
-#### 1. Clone the Repository
+1. Download or clone this repository.
+2. Add your Gemini API key in a file named `.env` in the project folder:
+   ```env
+   GEMINI_API_KEY=your_gemini_key_here
+   ```
+3. Double-click **`run_docmind.bat`**!  
+   *It will automatically install requirements, start the servers, and open your browser.*
+
+---
+
+### Option B: Step-by-Step Manual Setup
+
+#### Step 1: Clone the Project
 ```bash
 git clone https://github.com/patelDharu/DocMind_AI.git
 cd DocMind_AI
 ```
 
-#### 2. Create and Activate Virtual Environment
+#### Step 2: Create a Virtual Environment
 ```bash
 # Windows:
 python -m venv venv
 .\venv\Scripts\activate
 
-# macOS / Linux:
+# Mac / Linux:
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-#### 3. Install Dependencies
+#### Step 3: Install Required Packages
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 4. Configure Your API Key
-Create a `.env` file in the project root:
+#### Step 4: Add Your Gemini API Key
+Create a `.env` file in the main folder with this content:
 ```env
-GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_actual_gemini_api_key_here
 GEMINI_MODEL=gemini-flash-lite-latest
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+API_HOST=127.0.0.1
+API_PORT=8000
 ```
 
-#### 5. Launch the Application
+#### Step 5: Start the App!
 
-**Terminal 1 — Start the Backend:**
+Open two terminal windows:
+
+**Terminal 1 (Backend API):**
 ```bash
 python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-**Terminal 2 — Start the Frontend:**
+**Terminal 2 (Frontend Interface):**
 ```bash
-streamlit run frontend/streamlit_app.py --server.port=7860
+streamlit run frontend/streamlit_app.py --server.port 8501
 ```
 
-Open your browser at **`http://localhost:7860`**!
+Now open **`http://localhost:8501`** in your web browser and enjoy! 🎉
 
 ---
 
-## 📁 Project Structure
+## 🧪 Running Automated Tests
+
+To verify that all features, security checks, and document exports are working correctly:
+
+```bash
+# Run core system tests (Auth, Audio serialization, PDF tables, Document isolation):
+python test_fixes.py
+
+# Run API security tests (Route authentication & file size limits):
+python test_api_endpoints.py
+```
+
+---
+
+## 📁 Project Folder Tour
+
+Here is what each folder does in simple terms:
 
 ```text
 DocMind_AI/
 ├── app/
 │   ├── api/
-│   │   └── main.py              # FastAPI endpoints (/upload, /ask, /summarize, /edit)
+│   │   └── main.py          # The backend server that runs the API routes
 │   ├── core/
-│   │   ├── auth.py              # SQLite database (Users & Email-Scoped Chat Sessions)
-│   │   ├── chunker.py           # Lightweight pure Python text chunker (0MB overhead)
-│   │   ├── doc_editor.py        # Document Studio (modifies & exports DOCX/PDF)
-│   │   ├── embedder.py          # Google Gemini vector embeddings with retry cascade
-│   │   ├── intelligence.py      # Proactive Action/Deadline scanner & Summarizer
-│   │   ├── loader.py            # Universal multi-format loader + Gemini Vision OCR
-│   │   ├── rag.py               # Master RAG pipeline with Hybrid BM25 + Vector retrieval
-│   │   ├── speech.py            # Voice transcription & audio processing
-│   │   ├── tts.py               # Trilingual text-to-speech engine (EN/HI/GU)
-│   │   └── vectorstore.py       # ChromaDB persistent vector database
-│   └── data/                    # Storage for uploads, audio files, and users.db
+│   │   ├── auth.py          # Handles user login, passwords, and private sessions
+│   │   ├── chunker.py       # Splits long documents into smart, readable pieces
+│   │   ├── doc_editor.py    # AI Document Studio (edits and exports Word and PDF)
+│   │   ├── intelligence.py  # Finds deadlines, action items, and extracts tables
+│   │   ├── loader.py        # Reads PDFs, Word, Excel, images, and scanned files
+│   │   ├── rag.py           # Answers questions using the exact document content
+│   │   ├── speech.py        # Turns your voice into text
+│   │   ├── tts.py           # Speaks answers out loud (EN / HI / GU)
+│   │   └── vectorstore.py   # Stores document meanings for fast semantic search
+│   └── data/                # Where uploaded files and user databases are saved locally
 ├── frontend/
-│   ├── streamlit_app.py         # Main web UI with ChatGPT sidebar & auth portal
-│   └── components/
-│       └── chat_bar/            # Custom floating bottom search capsule component
-├── sample_documents/            # Ready-to-test sample PDFs, Word files & Excel sheets
-├── Dockerfile                   # Docker container specification
-├── start.sh                     # Linux container startup script for Render
-├── run_docmind.bat              # 1-Click Windows Batch launcher
-├── run_docmind.ps1              # 1-Click Windows PowerShell launcher
-├── requirements.txt             # Python package dependencies
-└── README.md                    # Project documentation
+│   └── streamlit_app.py     # The web application user interface
+├── sample_documents/        # Ready-to-use sample PDFs & files to test immediately
+├── .env.example             # Example configuration template
+├── requirements.txt         # List of Python packages needed
+└── README.md                # This friendly guide!
 ```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions, feedback, and feature requests are welcome!
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Got an idea or found a bug? We'd love your help!
+1. Fork this repository.
+2. Create your branch (`git checkout -b feature/CoolNewFeature`).
+3. Commit your changes (`git commit -m 'Add CoolNewFeature'`).
+4. Push to your branch (`git push origin feature/CoolNewFeature`).
+5. Open a Pull Request!
 
 ---
 
 ## 📜 License
 
-This project is licensed under the **Apache 2.0 License** — see the [LICENSE](LICENSE) file for details.
+This project is open-source under the **Apache 2.0 License** — see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 👤 Author
+## 👤 Author & Acknowledgements
 
-**Dharu Patel**
-- GitHub: [@patelDharu](https://github.com/patelDharu)
-- Project: [DocMind_AI](https://github.com/patelDharu/DocMind_AI)
-- Live Deployment: [DocMind AI on Render](https://docmind-ai-dc2h.onrender.com)
+Created with ❤️ by **Dharu Patel**
+- **GitHub**: [@patelDharu](https://github.com/patelDharu)
+- **Project Repo**: [DocMind_AI](https://github.com/patelDharu/DocMind_AI)
+- **Live Deployment**: [DocMind AI on Render](https://docmind-ai-dc2h.onrender.com)
+
+*If you like DocMind AI, please give this repository a ⭐ star on GitHub!*
