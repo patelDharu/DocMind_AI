@@ -1,14 +1,21 @@
 #!/bin/bash
 set -e
 
-echo "=== Starting DocMind AI Backend (FastAPI on port 8000) ==="
-python -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 &
+# Detect Python binary
+if command -v python3 &>/dev/null; then
+    PY_BIN="python3"
+else
+    PY_BIN="python"
+fi
+
+echo "=== Starting DocMind AI Backend (FastAPI on port 8000) using $PY_BIN ==="
+$PY_BIN -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 &
 FASTAPI_PID=$!
 
 echo "=== Waiting for FastAPI backend to initialize... ==="
 READY=0
-for i in {1..35}; do
-    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+for i in {1..40}; do
+    if $PY_BIN -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')" &>/dev/null; then
         echo "=== FastAPI backend is healthy! (PID: $FASTAPI_PID) ==="
         READY=1
         break
@@ -27,6 +34,4 @@ exec streamlit run frontend/streamlit_app.py \
     --server.port=$PORT \
     --server.address=0.0.0.0 \
     --server.headless=true \
-    --server.enableCORS=false \
-    --server.enableXsrfProtection=false \
     --server.maxUploadSize=25

@@ -29,7 +29,7 @@ from app.core.auth import (
     sanitize_chat_messages,
 )
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
 MAX_UPLOAD_SIZE_MB = 25
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
@@ -979,6 +979,42 @@ st.sidebar.markdown("---")
 if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
     clear_current_chat()
     st.rerun()
+
+
+# =========================================================
+# SYSTEM DIAGNOSTICS & HEALTH CHECK
+# =========================================================
+
+has_gemini_api_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
+if not has_gemini_api_key:
+    st.warning(
+        "⚠️ **Google Gemini API Key is missing on this server!**\n\n"
+        "Because `GEMINI_API_KEY` is not set in your environment variables, files cannot be embedded or analyzed, and AI answers cannot be generated.\n\n"
+        "**How to fix on Render**:\n"
+        "1. Open your **[Render Dashboard](https://dashboard.render.com/)**.\n"
+        "2. Click your DocMind AI Web Service → go to the **Environment** tab.\n"
+        "3. Click **Add Environment Variable**:\n"
+        "   - **Key**: `GEMINI_API_KEY`\n"
+        "   - **Value**: your Google Gemini API key from [Google AI Studio](https://aistudio.google.com/)\n"
+        "4. Click **Save Changes** and allow Render to redeploy."
+    )
+
+@st.cache_data(ttl=20)
+def check_backend_alive():
+    try:
+        r = requests.get(f"{API_URL}/health", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+if not check_backend_alive():
+    st.error(
+        f"🚨 **Cannot connect to the FastAPI backend at `{API_URL}`**.\n\n"
+        "File uploads and document queries require the backend server to be running.\n\n"
+        "**How to fix on Render**:\n"
+        "- Ensure your Web Service **Start Command** is `./start.sh` (or `bash start.sh`) so that both FastAPI and Streamlit are started together.\n"
+        "- If you deployed FastAPI as a separate Web Service, set the `API_URL` environment variable to your FastAPI backend URL."
+    )
 
 
 # =========================================================

@@ -124,17 +124,14 @@ async def gemini_service_exception_handler(request: Request, exc: GeminiServiceE
 # DIRECTORIES
 # =========================================================
 
-UPLOAD_DIR = Path("app/data/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+BASE_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+UPLOAD_DIR = BASE_DATA_DIR / "uploads"
+TEMP_AUDIO_DIR = BASE_DATA_DIR / "audio_in"
+AUDIO_OUT_DIR = BASE_DATA_DIR / "audio_out"
+GENERATED_DIR = BASE_DATA_DIR / "generated"
 
-TEMP_AUDIO_DIR = Path("app/data/audio_in")
-TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
-AUDIO_OUT_DIR = Path("app/data/audio_out")
-AUDIO_OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-GENERATED_DIR = Path("app/data/generated")
-GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+for _d in [UPLOAD_DIR, TEMP_AUDIO_DIR, AUDIO_OUT_DIR, GENERATED_DIR]:
+    _d.mkdir(parents=True, exist_ok=True)
 
 
 # =========================================================
