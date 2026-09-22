@@ -117,7 +117,14 @@ class Embedder:
                     contents=batch_texts,
                 )
                 self.active_model = model
-                return _extract_batch_embeddings(response)
+                vectors = _extract_batch_embeddings(response)
+                # Ensure the API returned a separate embedding for each text in the batch
+                if len(vectors) != len(batch_texts):
+                    raise ValueError(
+                        f"Batch API returned {len(vectors)} vectors for {len(batch_texts)} texts. "
+                        "Falling back to individual embedding."
+                    )
+                return vectors
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
@@ -131,7 +138,7 @@ class Embedder:
         raise last_error
 
     @retry_gemini(max_retries=4, initial_delay=2.0)
-    def embed_passages(self, texts: List[str], batch_size: int = 15) -> List[List[float]]:
+    def embed_passages(self, texts: List[str], batch_size: int = 30) -> List[List[float]]:
         if not texts:
             return []
 
@@ -139,19 +146,39 @@ class Embedder:
         for i in range(0, len(texts), batch_size):
             batch = [t.strip() or "empty" for t in texts[i : i + batch_size]]
             try:
-                # 1. Native batch embedding: embeds up to 15 passages in a single API call
+                # 1. Native batch embedding: embeds up to 30 passages in a single API call
                 batch_vectors = self._embed_batch(batch)
-                all_embeddings.extend(batch_vectors)
+                if len(batch_vectors) == len(batch):
+                    all_embeddings.extend(batch_vectors)
+                else:
+                    raise ValueError(f"Batch returned {len(batch_vectors)} vs expected {len(batch)}")
             except Exception as e:
                 logger.warning(
-                    f"Native batch embed failed ({e}). Falling back to sequential embedding for batch..."
+                    f"Native batch embed failed ({e}). Falling back to sequential embedding for batch of {len(batch)}..."
                 )
                 for text in batch:
-                    all_embeddings.append(self._embed_single(text))
+                    try:
+                        all_embeddings.append(self._embed_single(text))
+                    except Exception as single_err:
+                        logger.warning(f"Single embed failed for chunk ({single_err}). Padding with fallback vector.")
+                        dim = len(all_embeddings[0]) if all_embeddings else 768
+                        all_embeddings.append([0.0] * dim)
 
-            # Gentle 1s pacing between batches to stay comfortably below 15 RPM
+            # Light pacing between batches to stay safely within RPM
             if i + batch_size < len(texts):
-                time.sleep(1.0)
+                time.sleep(0.5)
+
+        # Invariant Guarantee: Number of embeddings must EXACTLY match number of texts
+        if len(all_embeddings) != len(texts):
+            logger.warning(
+                f"Embedding count gap: {len(all_embeddings)} embeddings for {len(texts)} texts. Aligning..."
+            )
+            dim = len(all_embeddings[0]) if all_embeddings else 768
+            if len(all_embeddings) > len(texts):
+                all_embeddings = all_embeddings[:len(texts)]
+            else:
+                while len(all_embeddings) < len(texts):
+                    all_embeddings.append([0.0] * dim)
 
         return all_embeddings
 

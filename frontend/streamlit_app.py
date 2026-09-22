@@ -28,6 +28,8 @@ from app.core.auth import (
 )
 
 API_URL = "http://127.0.0.1:8000"
+MAX_UPLOAD_SIZE_MB = 25
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
 def get_current_user_email() -> str:
@@ -139,7 +141,7 @@ st.markdown("""
         color: #1e3a8a !important;
     }
 
-    /* Fixed floating bottom search bar container */
+    /* Fixed floating bottom search bar container (Tab 1 Chat only) */
     div[data-testid="stBottom"] {
         display: block !important;
         background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.95) 30%, #ffffff 100%) !important;
@@ -152,6 +154,39 @@ st.markdown("""
         min-height: 64px !important;
     }
 
+    /* Auto-hide floating bottom chatbar when user is on Tab 2, 3, 4, or 5 */
+    body:has(.stTabs [data-baseweb="tab-list"] button:not(:first-child)[aria-selected="true"]) div[data-testid="stBottom"],
+    body:has(.stTabs [data-baseweb="tab-list"] [role="tab"]:not(:first-child)[aria-selected="true"]) div[data-testid="stBottom"],
+    body:has(.stTabs [data-baseweb="tab-list"] button:not(:first-child)[aria-selected="true"]) div[data-testid="stCustomComponentV1"]:has(iframe[title*="chat_bar"]) {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0px !important;
+        min-height: 0px !important;
+        padding: 0px !important;
+        margin: 0px !important;
+        pointer-events: none !important;
+    }
+    body:has(.stTabs [data-baseweb="tab-list"] button:not(:first-child)[aria-selected="true"]) .block-container {
+        padding-bottom: 2.5rem !important;
+    }
+
+    /* Modern clean file uploader dropzone */
+    div[data-testid="stFileUploader"] {
+        width: 100% !important;
+    }
+    div[data-testid="stFileUploader"] section {
+        padding: 1.2rem 1.4rem !important;
+        border-radius: 12px !important;
+        border: 1.5px dashed #cbd5e1 !important;
+        background-color: #f8fafc !important;
+        min-height: 85px !important;
+        transition: border-color 0.2s ease, background-color 0.2s ease !important;
+    }
+    div[data-testid="stFileUploader"] section:hover {
+        border-color: #4f46e5 !important;
+        background-color: #eff6ff !important;
+    }
+
     /* Sticky Navigation Tabs acting as clean navbar without covering content */
     .stTabs [data-baseweb="tab-list"] {
         position: sticky !important;
@@ -159,35 +194,44 @@ st.markdown("""
         z-index: 100 !important;
         background: #ffffff !important;
         border-bottom: 1.5px solid #e2e8f0 !important;
-        padding-top: 8px !important;
-        padding-bottom: 8px !important;
-        gap: 6px;
-        overflow-x: auto;
-        white-space: nowrap;
-        flex-wrap: nowrap;
-        -webkit-overflow-scrolling: touch;
+        padding-top: 6px !important;
+        padding-bottom: 6px !important;
+        gap: 6px !important;
+        display: flex !important;
+        width: 100% !important;
+        overflow-x: auto !important;
+        white-space: nowrap !important;
+        scrollbar-width: none !important;
+    }
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
     }
     .stTabs [data-baseweb="tab"] {
-        padding: 7px 14px;
-        font-size: 13.5px;
-        font-weight: 500;
-        border-radius: 6px;
-        white-space: nowrap;
-        flex-shrink: 0;
+        padding: 7px 13px !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        transition: all 0.15s ease !important;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background-color: #f1f5f9 !important;
+        color: #2563eb !important;
     }
 
     /* Desktop & Laptop (> 1024px) */
     @media (min-width: 1025px) {
         .block-container {
-            padding-top: 4.5rem !important;
+            padding-top: 1.6rem !important;
             padding-bottom: 7.5rem !important;
-            max-width: 94% !important;
-            width: 94% !important;
+            max-width: 96% !important;
+            width: 96% !important;
             margin: 0 auto !important;
         }
         div[data-testid="stBottomBlockContainer"] {
-            max-width: 94% !important;
-            width: 94% !important;
+            max-width: 96% !important;
+            width: 96% !important;
             margin: 0 auto !important;
             padding-left: 0.5rem !important;
             padding-right: 0.5rem !important;
@@ -197,8 +241,8 @@ st.markdown("""
     /* Tablet (601px - 1024px) */
     @media (min-width: 601px) and (max-width: 1024px) {
         .block-container {
-            padding-top: 3.8rem !important;
-            padding-bottom: 7rem !important;
+            padding-top: 1.2rem !important;
+            padding-bottom: 6.5rem !important;
             padding-left: 1rem !important;
             padding-right: 1rem !important;
             max-width: 98% !important;
@@ -211,8 +255,8 @@ st.markdown("""
             padding-right: 0.5rem !important;
         }
         .stTabs [data-baseweb="tab"] {
-            padding: 6px 11px !important;
-            font-size: 12.5px !important;
+            padding: 6px 10px !important;
+            font-size: 12px !important;
         }
         div[data-testid="stChatMessage"] {
             padding: 0.75rem 0.85rem !important;
@@ -534,8 +578,18 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
     """Uploads file to backend if not already uploaded, returning document_id with caching."""
     if not uploaded_file:
         return None
-    cache = st.session_state.setdefault("uploader_cache", {})
+
     file_bytes = uploaded_file.getvalue()
+
+    # Pre-upload check: Enforce 15 MB limit
+    if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
+        st.error(
+            f"⚠️ File '{uploaded_file.name}' is {len(file_bytes) / (1024 * 1024):.1f} MB. "
+            f"Maximum allowed file size is {MAX_UPLOAD_SIZE_MB} MB. Please upload a smaller file."
+        )
+        return None
+
+    cache = st.session_state.setdefault("uploader_cache", {})
     file_sig = f"{uploaded_file.name}_{len(file_bytes)}"
     if cache_prefix in cache and cache[cache_prefix].get("sig") == file_sig:
         return cache[cache_prefix].get("doc_id")
@@ -550,9 +604,21 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
                 st.session_state.setdefault("doc_action_alerts", {})[doc_id] = data["action_alert"]
             cache[cache_prefix] = {"sig": file_sig, "doc_id": doc_id}
             return doc_id
+        elif res.status_code == 413:
+            st.error(f"⚠️ File '{uploaded_file.name}' exceeds the 25 MB limit. Please upload a file smaller than 25 MB.")
+            return None
+        elif res.status_code == 502:
+            st.error(f"⚠️ 502 Bad Gateway: The cloud server was briefly busy or restarting. Please retry in a few moments.")
+            return None
         else:
             st.error(f"Upload failed for {uploaded_file.name}: {res.text}")
             return None
+    except requests.exceptions.ConnectionError:
+        st.error(f"⚠️ Connection Error: Unable to reach the backend server. If using cloud hosting, it may be waking up. Please retry in a moment.")
+        return None
+    except requests.exceptions.Timeout:
+        st.error(f"⚠️ Upload timed out for {uploaded_file.name}. Please upload a smaller or simpler file.")
+        return None
     except Exception as e:
         st.error(f"Error uploading {uploaded_file.name}: {e}")
         return None
@@ -903,11 +969,11 @@ if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
 # =========================================================
 
 tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
-    "💬 GPT-Style Chat & Q&A",
-    "✍️ Document Editor (Add & Edit Content)",
-    "📝 Document Summarizer",
-    "⚖️ Document Comparison",
-    "📊 Extract Key Information",
+    "💬 Chat & Q&A",
+    "✍️ Document Studio",
+    "📝 Summarizer",
+    "⚖️ Comparison",
+    "📊 Extract Data",
 ])
 
 
@@ -1004,95 +1070,109 @@ with tab_chat:
 
             if raw_b64:
                 file_bytes = base64.b64decode(raw_b64)
-                with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
-                    try:
-                        files = {"file": (fname, file_bytes)}
-                        res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
-                        if res.ok:
-                            data = res.json()
-                            new_doc_id = data["document_id"]
-                            action_alert = data.get("action_alert", {})
-                            st.session_state.setdefault("doc_action_alerts", {})[new_doc_id] = action_alert
-                            st.session_state.active_doc_id = new_doc_id
-                            st.session_state.selected_document_ids = [new_doc_id]
+                if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
+                    st.error(
+                        f"⚠️ File '{fname}' is {len(file_bytes) / (1024 * 1024):.1f} MB. "
+                        f"Maximum allowed file size is {MAX_UPLOAD_SIZE_MB} MB. Please upload a smaller file."
+                    )
+                else:
+                    with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
+                        try:
+                            files = {"file": (fname, file_bytes)}
+                            res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
+                            if res.ok:
+                                data = res.json()
+                                new_doc_id = data["document_id"]
+                                action_alert = data.get("action_alert", {})
+                                st.session_state.setdefault("doc_action_alerts", {})[new_doc_id] = action_alert
+                                st.session_state.active_doc_id = new_doc_id
+                                st.session_state.selected_document_ids = [new_doc_id]
 
-                            alert_block = format_action_alert_markdown(action_alert)
+                                alert_block = format_action_alert_markdown(action_alert)
 
-                            if prompt:
-                                st.session_state.messages.append({
-                                    "role": "user",
-                                    "content": f"📄 **[{fname}]**\n\n{prompt}",
-                                })
-                                with st.spinner("Analyzing attached document with Master Model..."):
-                                    try:
-                                        history_payload = [
-                                            {"role": m["role"], "content": m["content"]}
-                                            for m in st.session_state.messages[:-1]
-                                        ]
-                                        payload = {
-                                            "question": prompt,
-                                            "document_ids": [new_doc_id],
-                                            "history": history_payload,
-                                            "top_k": 8,
-                                        }
-                                        ask_res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
-                                        if ask_res.ok:
-                                            result = ask_res.json()
-                                            answer_text = result.get("answer", "No answer returned.")
-                                            full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
+                                if prompt:
+                                    st.session_state.messages.append({
+                                        "role": "user",
+                                        "content": f"📄 **[{fname}]**\n\n{prompt}",
+                                    })
+                                    with st.spinner("Analyzing attached document with Master Model..."):
+                                        try:
+                                            history_payload = [
+                                                {"role": m["role"], "content": m["content"]}
+                                                for m in st.session_state.messages[:-1]
+                                            ]
+                                            payload = {
+                                                "question": prompt,
+                                                "document_ids": [new_doc_id],
+                                                "history": history_payload,
+                                                "top_k": 8,
+                                            }
+                                            ask_res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
+                                            if ask_res.ok:
+                                                result = ask_res.json()
+                                                answer_text = result.get("answer", "No answer returned.")
+                                                full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
+                                                st.session_state.messages.append({
+                                                    "role": "assistant",
+                                                    "content": full_reply,
+                                                    "confidence": result.get("confidence", "high"),
+                                                    "sources": result.get("sources", []),
+                                                    "rewritten_query": result.get("rewritten_query"),
+                                                    "detected_language": result.get("detected_language", "en"),
+                                                    "action_alert": action_alert,
+                                                    "doc_id": new_doc_id,
+                                                })
+                                            else:
+                                                st.session_state.messages.append({
+                                                    "role": "assistant",
+                                                    "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
+                                                    "confidence": "low",
+                                                    "sources": [],
+                                                    "action_alert": action_alert,
+                                                    "doc_id": new_doc_id,
+                                                })
+                                        except Exception as ask_err:
                                             st.session_state.messages.append({
                                                 "role": "assistant",
-                                                "content": full_reply,
-                                                "confidence": result.get("confidence", "high"),
-                                                "sources": result.get("sources", []),
-                                                "rewritten_query": result.get("rewritten_query"),
-                                                "detected_language": result.get("detected_language", "en"),
-                                                "action_alert": action_alert,
-                                                "doc_id": new_doc_id,
-                                            })
-                                        else:
-                                            st.session_state.messages.append({
-                                                "role": "assistant",
-                                                "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
+                                                "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
                                                 "confidence": "low",
                                                 "sources": [],
                                                 "action_alert": action_alert,
                                                 "doc_id": new_doc_id,
                                             })
-                                    except Exception as ask_err:
-                                        st.session_state.messages.append({
-                                            "role": "assistant",
-                                            "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
-                                            "confidence": "low",
-                                            "sources": [],
-                                            "action_alert": action_alert,
-                                            "doc_id": new_doc_id,
-                                        })
-                            else:
-                                st.session_state.messages.append({
-                                    "role": "user",
-                                    "content": f"📎 Attached document: **{fname}**",
-                                })
-                                welcome_parts = [f"📄 **{fname}** is ready."]
-                                if alert_block:
-                                    welcome_parts.append(alert_block)
-                                welcome_parts.append("---\n*Ask any question about this document below, or choose an option from the tabs above.*")
-                                welcome_msg = "\n\n".join(welcome_parts)
-                                st.session_state.messages.append({
-                                    "role": "assistant",
-                                    "content": welcome_msg,
-                                    "confidence": "high",
-                                    "sources": [],
-                                    "action_alert": action_alert,
-                                    "doc_id": new_doc_id,
-                                })
+                                else:
+                                    st.session_state.messages.append({
+                                        "role": "user",
+                                        "content": f"📎 Attached document: **{fname}**",
+                                    })
+                                    welcome_parts = [f"📄 **{fname}** is ready."]
+                                    if alert_block:
+                                        welcome_parts.append(alert_block)
+                                    welcome_parts.append("---\n*Ask any question about this document below, or choose an option from the tabs above.*")
+                                    welcome_msg = "\n\n".join(welcome_parts)
+                                    st.session_state.messages.append({
+                                        "role": "assistant",
+                                        "content": welcome_msg,
+                                        "confidence": "high",
+                                        "sources": [],
+                                        "action_alert": action_alert,
+                                        "doc_id": new_doc_id,
+                                    })
 
-                            save_current_chat_session()
-                            st.rerun()
-                        else:
-                            st.error(f"Upload failed: {res.text}")
-                    except Exception as e:
-                        st.error(f"Upload error: {e}")
+                                save_current_chat_session()
+                                st.rerun()
+                            elif res.status_code == 413:
+                                st.error(f"⚠️ File '{fname}' exceeds the 25 MB limit. Please upload a file smaller than 25 MB.")
+                            elif res.status_code == 502:
+                                st.error("⚠️ 502 Bad Gateway: The cloud server was briefly busy or restarting. Please retry in a moment.")
+                            else:
+                                st.error(f"Upload failed: {res.text}")
+                        except requests.exceptions.ConnectionError:
+                            st.error("⚠️ Connection Error: Unable to reach the backend server. If using cloud hosting, it may be waking up. Please retry in a moment.")
+                        except requests.exceptions.Timeout:
+                            st.error(f"⚠️ Upload timed out for {fname}. Please try again.")
+                        except Exception as e:
+                            st.error(f"Upload error: {e}")
 
         # 2. Text Query (Typed or Web Speech Recognition Transcribed)
         elif chat_val.get("type") == "text":

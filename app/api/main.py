@@ -18,6 +18,9 @@ from pydantic import BaseModel
 load_dotenv()
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
+logger = logging.getLogger("docmind.api")
+
+MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB strict upload cap
 
 from app.core.loader import load_document
 from app.core.chunker import chunk_text
@@ -174,8 +177,27 @@ def upload_document(file: UploadFile = File(...)):
     dest = UPLOAD_DIR / stored_filename
 
     try:
+        gc.collect()
+        total_bytes = 0
+        chunk_buffer_size = 1024 * 1024  # 1 MB buffer
         with open(dest, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while True:
+                chunk = file.file.read(chunk_buffer_size)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                    f.close()
+                    if dest.exists():
+                        try:
+                            dest.unlink()
+                        except Exception:
+                            pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File size ({total_bytes / (1024 * 1024):.1f} MB) exceeds the 25 MB limit. Please upload a file smaller than 25 MB.",
+                    )
+                f.write(chunk)
 
         records = load_document(str(dest))
         if not records:
@@ -209,15 +231,26 @@ def upload_document(file: UploadFile = File(...)):
 
         pipeline.ingest(chunks)
 
-        # Proactively scan for actions, deadlines & consequences
-        doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
-        action_alert = intelligence.analyze_action_and_deadlines(
-            document_text=doc_text,
-            filename=original_filename,
-            language="en",
-        )
+        # Proactively scan for actions, deadlines & consequences (resilient to model rate-limits)
+        action_alert = {"requires_action": False, "urgency": "none"}
+        try:
+            doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
+            action_alert = intelligence.analyze_action_and_deadlines(
+                document_text=doc_text,
+                filename=original_filename,
+                language="en",
+            )
+        except Exception as alert_err:
+            logger.warning(f"Action alert analysis skipped or timed out for {original_filename}: {alert_err}")
 
         gc.collect()
+    except HTTPException:
+        if dest.exists():
+            try:
+                dest.unlink()
+            except Exception:
+                pass
+        raise
     except Exception as e:
         if dest.exists():
             try:

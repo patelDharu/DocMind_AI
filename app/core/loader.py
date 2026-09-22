@@ -169,65 +169,78 @@ class DocumentLoader:
     def _load_pdf(file_path: str) -> List[Dict[str, Any]]:
         docs = []
         filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
 
-        # 1. Primary extractor: pdfplumber (digital text + tables as markdown)
+        # Fast inspection of page count using pypdf
+        total_pages = 0
         try:
-            with pdfplumber.open(file_path) as pdf:
-                for page_idx, page in enumerate(pdf.pages, start=1):
-                    page_content_parts = []
-                    raw_text = page.extract_text() or ""
-                    if raw_text.strip():
-                        page_content_parts.append(raw_text.strip())
+            reader = pypdf.PdfReader(file_path)
+            total_pages = len(reader.pages)
+        except Exception:
+            total_pages = 0
 
-                        tables = page.extract_tables()
-                        if tables:
-                            for t_idx, table in enumerate(tables, start=1):
-                                md_table = DocumentLoader._format_table_as_markdown(table)
-                                if md_table:
-                                    page_content_parts.append(f"\n[Table {t_idx} on Page {page_idx}]\n{md_table}\n")
+        MAX_PAGES = 100
+        # If the PDF is large (>15 pages or >3MB), use pypdf for ultra-fast, memory-efficient extraction.
+        # This completely avoids pdfplumber table extraction freezing on 100+ pages and causing 502/OOM.
+        use_fast_mode = total_pages > 15 or file_size > 3 * 1024 * 1024
 
-                    full_page_text = "\n\n".join(page_content_parts).strip()
-                    if full_page_text:
+        if use_fast_mode and total_pages > 0:
+            try:
+                reader = pypdf.PdfReader(file_path)
+                pages_to_read = min(total_pages, MAX_PAGES)
+                for page_idx in range(pages_to_read):
+                    p_text = (reader.pages[page_idx].extract_text() or "").strip()
+                    if p_text:
                         docs.append({
-                            "text": full_page_text,
+                            "text": p_text,
                             "metadata": {
                                 "source": filename,
-                                "page": page_idx,
-                                "char_count": len(full_page_text),
-                                "has_tables": len(tables) > 0 if tables else False,
-                            },
+                                "page": page_idx + 1,
+                                "char_count": len(p_text),
+                                "has_tables": False,
+                            }
                         })
-        except Exception as e:
-            logger.warning(f"pdfplumber failed on {filename}: {e}")
+            except Exception as e:
+                logger.warning(f"pypdf fast extraction failed on {filename}: {e}")
+
+        # If not large or fast extraction returned no text, use pdfplumber
+        if not docs:
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    pages_to_read = min(len(pdf.pages), MAX_PAGES)
+                    extract_tables_flag = (pages_to_read <= 15)
+                    for page_idx in range(pages_to_read):
+                        page = pdf.pages[page_idx]
+                        page_content_parts = []
+                        raw_text = page.extract_text() or ""
+                        if raw_text.strip():
+                            page_content_parts.append(raw_text.strip())
+
+                            if extract_tables_flag:
+                                tables = page.extract_tables()
+                                if tables:
+                                    for t_idx, table in enumerate(tables, start=1):
+                                        md_table = DocumentLoader._format_table_as_markdown(table)
+                                        if md_table:
+                                            page_content_parts.append(f"\n[Table {t_idx} on Page {page_idx + 1}]\n{md_table}\n")
+
+                        full_page_text = "\n\n".join(page_content_parts).strip()
+                        if full_page_text:
+                            docs.append({
+                                "text": full_page_text,
+                                "metadata": {
+                                    "source": filename,
+                                    "page": page_idx + 1,
+                                    "char_count": len(full_page_text),
+                                    "has_tables": extract_tables_flag,
+                                },
+                            })
+            except Exception as e:
+                logger.warning(f"pdfplumber failed on {filename}: {e}")
 
         total_chars = sum(len(d["text"]) for d in docs)
 
-        # 2. Secondary extractor: pypdf if pdfplumber extracted nothing or very little
-        if total_chars < 50:
-            try:
-                reader = pypdf.PdfReader(file_path)
-                p0_text = (reader.pages[0].extract_text() or "").strip() if reader.pages else ""
-                if p0_text:
-                    pypdf_docs = []
-                    for p_idx, page in enumerate(reader.pages, start=1):
-                        p_text = page.extract_text() or ""
-                        if p_text.strip():
-                            pypdf_docs.append({
-                                "text": p_text.strip(),
-                                "metadata": {
-                                    "source": filename,
-                                    "page": p_idx,
-                                    "char_count": len(p_text.strip()),
-                                    "has_tables": False,
-                                }
-                            })
-                    if sum(len(d["text"]) for d in pypdf_docs) > total_chars:
-                        docs = pypdf_docs
-                        total_chars = sum(len(d["text"]) for d in docs)
-            except Exception as e:
-                logger.warning(f"pypdf fallback failed on {filename}: {e}")
-
-        # 3. Tertiary extractor: Gemini Vision OCR for scanned or image-based PDFs
+        # Fallback to Gemini Vision OCR for scanned or image-based PDFs (<50 characters)
         if total_chars < 50:
             logger.info(f"PDF {filename} appears to be scanned/image-based (<50 chars). Triggering Gemini OCR...")
             ocr_docs = DocumentLoader._ocr_with_gemini(file_path, mime_type="application/pdf")
@@ -331,19 +344,22 @@ class DocumentLoader:
         docs = []
         try:
             with pd.ExcelFile(file_path) as excel_file:
-                for sheet_idx, sheet_name in enumerate(excel_file.sheet_names, start=1):
+                for sheet_idx, sheet_name in enumerate(excel_file.sheet_names[:10], start=1):
                     df = pd.read_excel(excel_file, sheet_name=sheet_name)
                     if df.empty:
                         continue
-                    df_clean = df.fillna("")
+                    # Limit to first 300 rows per sheet to prevent memory spikes on large spreadsheets
+                    df_sample = df.head(300).fillna("")
                     try:
-                        md_table = df_clean.to_markdown(index=False)
+                        md_table = df_sample.to_markdown(index=False)
                     except Exception:
-                        headers = [str(c) for c in df_clean.columns]
-                        rows = df_clean.values.tolist()
+                        headers = [str(c) for c in df_sample.columns]
+                        rows = df_sample.values.tolist()
                         md_table = DocumentLoader._format_table_as_markdown([headers] + rows)
 
                     sheet_text = f"### Sheet: {sheet_name}\n\n{md_table}"
+                    if len(df) > 300:
+                        sheet_text += f"\n\n*(Showing top 300 of {len(df)} total rows)*"
                     docs.append({
                         "text": sheet_text,
                         "metadata": {
@@ -364,7 +380,8 @@ class DocumentLoader:
         filename = os.path.basename(file_path)
         sep = "\t" if file_path.lower().endswith(".tsv") else ","
         try:
-            df = pd.read_csv(file_path, sep=sep)
+            # Read up to 500 rows to keep memory bounded on large CSV files
+            df = pd.read_csv(file_path, sep=sep, nrows=500)
             df_clean = df.fillna("")
             try:
                 md_table = df_clean.to_markdown(index=False)
@@ -373,12 +390,13 @@ class DocumentLoader:
                 rows = df_clean.values.tolist()
                 md_table = DocumentLoader._format_table_as_markdown([headers] + rows)
 
+            text_content = f"### Data Table: {filename}\n\n{md_table}"
             return [{
-                "text": f"### Data Table: {filename}\n\n{md_table}",
+                "text": text_content,
                 "metadata": {
                     "source": filename,
                     "page": 1,
-                    "char_count": len(md_table),
+                    "char_count": len(text_content),
                     "has_tables": True,
                 }
             }]

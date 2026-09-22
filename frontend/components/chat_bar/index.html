@@ -542,7 +542,14 @@ menuUploadFile.addEventListener("click", () => {
 // Handle File Selection
 hiddenFileInput.addEventListener("change", () => {
     if (hiddenFileInput.files && hiddenFileInput.files.length > 0) {
-        attachedFile = hiddenFileInput.files[0];
+        const file = hiddenFileInput.files[0];
+        const maxBytes = 25 * 1024 * 1024; // 25 MB limit
+        if (file.size > maxBytes) {
+            alert("⚠️ File \"" + file.name + "\" is " + formatBytes(file.size) + ". The maximum allowed file size is 25 MB. Please select a smaller file.");
+            clearAttachment();
+            return;
+        }
+        attachedFile = file;
         chipFilename.textContent = attachedFile.name;
         chipFilesize.textContent = formatBytes(attachedFile.size);
         attachmentChip.style.display = "inline-flex";

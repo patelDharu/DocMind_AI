@@ -29,4 +29,4 @@ exec streamlit run frontend/streamlit_app.py \
     --server.headless=true \
     --server.enableCORS=false \
     --server.enableXsrfProtection=false \
-    --server.maxUploadSize=200
+    --server.maxUploadSize=25
