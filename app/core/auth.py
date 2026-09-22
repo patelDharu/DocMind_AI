@@ -54,6 +54,17 @@ def init_user_db():
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_email ON chat_sessions(user_email);
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    token TEXT PRIMARY KEY,
+                    user_email TEXT NOT NULL COLLATE NOCASE,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
+                );
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_sessions_email ON user_sessions(user_email);
+            """)
     finally:
         conn.close()
 
@@ -120,6 +131,8 @@ def register_user(name: str, email: str, password: str) -> Tuple[bool, str, Opti
             "email": clean_email,
             "created_at": now_str,
         }
+        token = generate_session_token(clean_email)
+        user_dict["token"] = token
         return True, "Account created successfully!", user_dict
     except Exception as e:
         return False, f"Registration error: {e}", None
@@ -165,11 +178,162 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
             "created_at": row["created_at"],
             "last_login": now_str,
         }
+        token = generate_session_token(clean_email)
+        user_dict["token"] = token
         return True, f"Welcome back, {row['name']}!", user_dict
     except Exception as e:
         return False, f"Authentication error: {e}", None
     finally:
         conn.close()
+
+
+def generate_session_token(email: str, duration_days: int = 30) -> str:
+    """Generates and persists a secure session token for the user."""
+    from datetime import timedelta
+    clean_email = email.strip().lower()
+    token = f"dmtk_{secrets.token_urlsafe(32)}"
+    now = datetime.now()
+    created_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    expires_at = (now + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    init_user_db()
+    conn = get_db_connection()
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO user_sessions (token, user_email, created_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (token, clean_email, created_at, expires_at),
+            )
+        return token
+    finally:
+        conn.close()
+
+
+def validate_session_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Validates a session token or static API key.
+    Returns user dict if valid, None otherwise.
+    """
+    if not token or not isinstance(token, str):
+        return None
+
+    clean_token = token.strip()
+    if clean_token.startswith("Bearer "):
+        clean_token = clean_token[7:].strip()
+
+    # 1. Master API key check
+    master_key = os.getenv("DOCMIND_API_KEY")
+    if master_key and clean_token == master_key.strip():
+        return {
+            "user_id": "usr_system",
+            "name": "System Administrator",
+            "email": "admin@docmind.ai",
+            "is_admin": True,
+            "token": clean_token,
+        }
+
+    # 2. Database session check
+    init_user_db()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_email, expires_at FROM user_sessions WHERE token = ?",
+            (clean_token,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        expires_at_str = row["expires_at"]
+        if expires_at_str:
+            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() > expires_at:
+                return None
+
+        email = row["user_email"]
+        cursor.execute(
+            "SELECT user_id, name, email, created_at, last_login FROM users WHERE email = ?",
+            (email,),
+        )
+        user_row = cursor.fetchone()
+        if user_row:
+            u_dict = dict(user_row)
+            u_dict["token"] = clean_token
+            return u_dict
+
+        return {
+            "user_id": f"usr_{uuid.uuid4().hex[:12]}",
+            "name": email.split("@")[0].capitalize(),
+            "email": email,
+            "token": clean_token,
+        }
+    except Exception as e:
+        print(f"Token validation error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def revoke_session_token(token: str) -> bool:
+    """Revokes / deletes a session token."""
+    if not token:
+        return False
+    clean_token = token.replace("Bearer ", "").strip()
+    init_user_db()
+    conn = get_db_connection()
+    try:
+        with conn:
+            conn.execute("DELETE FROM user_sessions WHERE token = ?", (clean_token,))
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def get_or_create_demo_token() -> str:
+    """Returns an active session token for demo@docmind.ai."""
+    create_demo_user_if_needed()
+    return generate_session_token("demo@docmind.ai")
+
+
+def sanitize_chat_messages(messages: Any) -> list:
+    """
+    Recursively cleans message payloads to ensure all bytes or non-serializable objects
+    are safely stripped or converted before JSON persistence.
+    """
+    if not isinstance(messages, list):
+        return []
+
+    clean_list = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        clean_msg = {}
+        for k, v in msg.items():
+            if isinstance(v, bytes):
+                # Never store raw bytes in JSON sessions
+                continue
+            elif isinstance(v, dict):
+                clean_msg[k] = {
+                    sub_k: (str(sub_v) if isinstance(sub_v, bytes) else sub_v)
+                    for sub_k, sub_v in v.items()
+                    if not isinstance(sub_v, bytes)
+                }
+            elif isinstance(v, list):
+                clean_msg[k] = [
+                    (str(x) if isinstance(x, bytes) else x)
+                    for x in v
+                    if not isinstance(x, bytes)
+                ]
+            else:
+                clean_msg[k] = v
+        clean_list.append(clean_msg)
+    return clean_list
 
 
 def create_demo_user_if_needed():
@@ -275,9 +439,11 @@ def save_user_chat_session(email: str, session: Dict[str, Any]):
         sess_id = session["id"]
         title = session.get("title", "New Conversation")
         updated_at = session.get("updated_at") or datetime.now().strftime("%d %b, %H:%M")
-        doc_ids_json = json.dumps(session.get("selected_document_ids", []))
+        doc_ids_json = json.dumps(session.get("selected_document_ids", []), default=str)
         active_doc_id = session.get("active_doc_id")
-        messages_json = json.dumps(session.get("messages", []), ensure_ascii=False)
+        raw_msgs = session.get("messages", [])
+        safe_msgs = sanitize_chat_messages(raw_msgs)
+        messages_json = json.dumps(safe_msgs, ensure_ascii=False, default=str)
 
         with conn:
             conn.execute(

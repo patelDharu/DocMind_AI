@@ -25,6 +25,8 @@ from app.core.auth import (
     save_user_chat_session,
     delete_user_chat_session,
     clear_all_user_chat_sessions,
+    get_or_create_demo_token,
+    sanitize_chat_messages,
 )
 
 API_URL = "http://127.0.0.1:8000"
@@ -37,6 +39,17 @@ def get_current_user_email() -> str:
     if st.session_state.get("current_user"):
         return st.session_state.current_user.get("email", "").strip().lower()
     return ""
+
+
+def get_api_headers() -> dict:
+    """Returns HTTP Authorization headers for backend API requests."""
+    token = st.session_state.get("auth_token")
+    if not token and st.session_state.get("current_user"):
+        token = st.session_state.current_user.get("token")
+    if not token and st.session_state.get("authenticated"):
+        token = get_or_create_demo_token()
+        st.session_state.auth_token = token
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 chat_bar_path = str(ROOT_DIR / "frontend" / "components" / "chat_bar")
@@ -407,13 +420,14 @@ def save_current_chat_session():
     if existing and existing.get("title") and existing.get("title") != "New Conversation":
         clean_title = existing.get("title")
 
+    safe_messages = sanitize_chat_messages(st.session_state.get("messages", []))
     session_data = {
         "id": sess_id,
         "title": clean_title,
         "updated_at": now_str,
         "selected_document_ids": st.session_state.get("selected_document_ids", []),
         "active_doc_id": st.session_state.get("active_doc_id"),
-        "messages": st.session_state.get("messages", []),
+        "messages": safe_messages,
     }
 
     save_user_chat_session(email, session_data)
@@ -503,7 +517,7 @@ if "doc_action_alerts" not in st.session_state:
 
 def fetch_documents():
     try:
-        res = requests.get(f"{API_URL}/documents", timeout=10)
+        res = requests.get(f"{API_URL}/documents", headers=get_api_headers(), timeout=10)
         if res.ok:
             return res.json().get("documents", [])
     except Exception:
@@ -513,7 +527,7 @@ def fetch_documents():
 
 def delete_document(doc_id: str):
     try:
-        res = requests.delete(f"{API_URL}/documents/{doc_id}", timeout=15)
+        res = requests.delete(f"{API_URL}/documents/{doc_id}", headers=get_api_headers(), timeout=15)
         return res.ok
     except Exception:
         return False
@@ -522,7 +536,7 @@ def delete_document(doc_id: str):
 def synthesize_audio_api(text: str, lang: str = "en") -> bytes | None:
     try:
         payload = {"text": text[:1500], "language": lang}
-        res = requests.post(f"{API_URL}/speak", json=payload, timeout=30)
+        res = requests.post(f"{API_URL}/speak", json=payload, headers=get_api_headers(), timeout=30)
         if res.ok:
             data = res.json()
             fname = data.get("filename")
@@ -530,8 +544,8 @@ def synthesize_audio_api(text: str, lang: str = "en") -> bytes | None:
             local_p = ROOT_DIR / "app" / "data" / "audio_out" / fname
             if local_p.exists():
                 return local_p.read_bytes()
-            # 2. Or fetch audio bytes via container internal API call
-            aud_res = requests.get(f"{API_URL}/audio/{fname}", timeout=20)
+            # 2. Or fetch audio bytes via internal API call with auth headers
+            aud_res = requests.get(f"{API_URL}/audio/{fname}", headers=get_api_headers(), timeout=20)
             if aud_res.ok:
                 return aud_res.content
     except Exception as e:
@@ -581,7 +595,7 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
 
     file_bytes = uploaded_file.getvalue()
 
-    # Pre-upload check: Enforce 15 MB limit
+    # Pre-upload check: Enforce 25 MB limit
     if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
         st.error(
             f"⚠️ File '{uploaded_file.name}' is {len(file_bytes) / (1024 * 1024):.1f} MB. "
@@ -596,7 +610,7 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
 
     try:
         files = {"file": (uploaded_file.name, file_bytes)}
-        res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
+        res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
         if res.ok:
             data = res.json()
             doc_id = data["document_id"]
@@ -746,6 +760,7 @@ def render_auth_page():
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.current_user = user
+                        st.session_state.auth_token = user.get("token")
                         st.success(msg)
                         st.rerun()
                     else:
@@ -756,6 +771,7 @@ def render_auth_page():
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.current_user = user
+                        st.session_state.auth_token = user.get("token") or get_or_create_demo_token()
                         st.rerun()
                     else:
                         st.error(msg)
@@ -783,6 +799,7 @@ def render_auth_page():
                         if success:
                             st.session_state.authenticated = True
                             st.session_state.current_user = user
+                            st.session_state.auth_token = user.get("token")
                             st.success(msg)
                             st.rerun()
                         else:
@@ -1028,12 +1045,11 @@ with tab_chat:
                 st.markdown(clean_legacy_html(msg["content"]), unsafe_allow_html=True)
 
                 if msg["role"] == "assistant":
-                    # Audio Playback
+                    # Audio Playback (Kept purely in audio_cache without mutating msg with raw bytes)
                     if st.button("🔊 Listen", key=f"speak_btn_{idx}", help="Play answer audio"):
-                        audio_data = msg.get("audio_bytes")
+                        audio_data = st.session_state.audio_cache.get(idx)
                         if not audio_data:
                             audio_data = synthesize_audio_api(msg["content"], msg.get("detected_language", "en"))
-                            msg["audio_bytes"] = audio_data
                         if audio_data:
                             st.session_state.audio_cache[idx] = audio_data
 
@@ -1079,7 +1095,7 @@ with tab_chat:
                     with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
                         try:
                             files = {"file": (fname, file_bytes)}
-                            res = requests.post(f"{API_URL}/upload", files=files, timeout=300)
+                            res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
                             if res.ok:
                                 data = res.json()
                                 new_doc_id = data["document_id"]
@@ -1107,7 +1123,7 @@ with tab_chat:
                                                 "history": history_payload,
                                                 "top_k": 8,
                                             }
-                                            ask_res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
+                                            ask_res = requests.post(f"{API_URL}/ask", json=payload, headers=get_api_headers(), timeout=120)
                                             if ask_res.ok:
                                                 result = ask_res.json()
                                                 answer_text = result.get("answer", "No answer returned.")
@@ -1193,7 +1209,7 @@ with tab_chat:
                             "history": history_payload,
                             "top_k": 8,
                         }
-                        res = requests.post(f"{API_URL}/ask", json=payload, timeout=120)
+                        res = requests.post(f"{API_URL}/ask", json=payload, headers=get_api_headers(), timeout=120)
 
                         if res.ok:
                             result = res.json()
@@ -1232,7 +1248,7 @@ with tab_chat:
                             "speak_reply": "true",
                             "history": json.dumps(hist),
                         }
-                        res = requests.post(f"{API_URL}/ask-voice", files=files, data=data, timeout=180)
+                        res = requests.post(f"{API_URL}/ask-voice", files=files, data=data, headers=get_api_headers(), timeout=180)
                         if res.ok:
                             result = res.json()
                             user_text = result.get("transcribed_question", "Voice Query")
@@ -1249,7 +1265,7 @@ with tab_chat:
                                     audio_bytes = local_p.read_bytes()
                                 else:
                                     try:
-                                        r_aud = requests.get(f"{API_URL}/audio/{fname}", timeout=15)
+                                        r_aud = requests.get(f"{API_URL}/audio/{fname}", headers=get_api_headers(), timeout=15)
                                         if r_aud.ok:
                                             audio_bytes = r_aud.content
                                     except Exception:
@@ -1266,7 +1282,6 @@ with tab_chat:
                                 "sources": result.get("sources", []),
                                 "rewritten_query": result.get("rewritten_query"),
                                 "detected_language": result.get("detected_language", "en"),
-                                "audio_bytes": audio_bytes,
                             })
                             save_current_chat_session()
                             st.rerun()
@@ -1303,7 +1318,7 @@ with tab_studio:
         )
         use_active_doc = st.checkbox(
             f"⚡ Or use current document from chat: **{active_name}**",
-            value=False,
+            value=True,
             key="studio_use_active_check",
         )
 
@@ -1383,7 +1398,7 @@ with tab_studio:
                         "auto_index": auto_index_check,
                         "edit_mode": selected_mode,
                     }
-                    res = requests.post(f"{API_URL}/document/edit", json=payload, timeout=180)
+                    res = requests.post(f"{API_URL}/document/edit", json=payload, headers=get_api_headers(), timeout=180)
                     if res.ok:
                         data = res.json()
                         new_file_name = data["filename"]
@@ -1391,7 +1406,7 @@ with tab_studio:
 
                         st.success(f"🎉 Successfully created **{new_file_name}**!")
 
-                        file_bytes = requests.get(download_url).content
+                        file_bytes = requests.get(download_url, headers=get_api_headers()).content
                         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if fmt_ext == "docx" else "application/pdf"
 
                         st.download_button(
@@ -1409,7 +1424,11 @@ with tab_studio:
                         with st.expander("📄 Preview Generated Document Content", expanded=True):
                             st.markdown(data.get("updated_content", ""))
                     else:
-                        st.error(f"Studio error: {res.text}")
+                        try:
+                            err_detail = res.json().get("detail", res.text)
+                        except Exception:
+                            err_detail = res.text
+                        st.error(f"Studio error: {err_detail}")
                 except Exception as e:
                     st.error(f"Connection error: {e}")
 
@@ -1441,7 +1460,7 @@ with tab_summarize:
         )
         use_active_doc_sum = st.checkbox(
             f"⚡ Or summarize current document from chat: **{active_name}**",
-            value=False,
+            value=True,
             key="sum_use_active_check",
         )
 
@@ -1504,7 +1523,7 @@ with tab_summarize:
                         "summary_type": sum_type,
                         "language": sum_lang,
                     }
-                    res = requests.post(f"{API_URL}/summarize", json=payload, timeout=120)
+                    res = requests.post(f"{API_URL}/summarize", json=payload, headers=get_api_headers(), timeout=120)
                     if res.ok:
                         data = res.json()
                         st.success(f"Summary for: **{data['filename']}**")
@@ -1615,7 +1634,7 @@ with tab_compare:
                         "focus_aspects": focus,
                         "language": comp_lang,
                     }
-                    res = requests.post(f"{API_URL}/compare", json=payload, timeout=180)
+                    res = requests.post(f"{API_URL}/compare", json=payload, headers=get_api_headers(), timeout=180)
                     if res.ok:
                         data = res.json()
                         st.markdown(data.get("comparison", ""))
@@ -1652,7 +1671,7 @@ with tab_extract:
         )
         use_active_doc_ext = st.checkbox(
             f"⚡ Or extract from current document in chat: **{active_name}**",
-            value=False,
+            value=True,
             key="extract_use_active_check",
         )
 
@@ -1696,7 +1715,12 @@ with tab_extract:
                         "document_id": target_doc_id,
                         "extraction_type": ext_type,
                     }
-                    res = requests.post(f"{API_URL}/extract", json=payload, timeout=120)
+                    res = requests.post(f"{API_URL}/extract", json=payload, headers=get_api_headers(), timeout=120)
+                except Exception as conn_err:
+                    st.error(f"Connection error: {conn_err}")
+                    res = None
+
+                if res is not None:
                     if res.ok:
                         data = res.json()
 
@@ -1707,7 +1731,10 @@ with tab_extract:
 
                         if data.get("extracted_items"):
                             st.subheader("📋 Extracted Attributes")
-                            st.dataframe(data["extracted_items"], use_container_width=True)
+                            try:
+                                st.dataframe(data["extracted_items"], use_container_width=True)
+                            except Exception:
+                                st.write(data["extracted_items"])
 
                         if data.get("tables_detected"):
                             st.subheader("📊 Detected Tables")
@@ -1715,14 +1742,54 @@ with tab_extract:
                                 st.markdown(f"**{tbl.get('table_name', 'Table')}**")
                                 headers = tbl.get("headers", [])
                                 rows = tbl.get("rows", [])
-                                if headers and rows:
-                                    import pandas as pd
-                                    df = pd.DataFrame(rows, columns=headers)
-                                    st.dataframe(df, use_container_width=True)
+                                if headers or rows:
+                                    try:
+                                        import pandas as pd
+                                        clean_headers = [str(h).strip() if h is not None else "" for h in (headers or [])]
+                                        clean_rows = []
+                                        for r in (rows or []):
+                                            if isinstance(r, list):
+                                                clean_rows.append([str(c) if c is not None else "" for c in r])
+                                            elif isinstance(r, dict):
+                                                clean_rows.append([str(v) if v is not None else "" for v in r.values()])
+                                            else:
+                                                clean_rows.append([str(r)])
+
+                                        max_cols = max(len(clean_headers), max((len(r) for r in clean_rows), default=0))
+                                        if max_cols > 0:
+                                            while len(clean_headers) < max_cols:
+                                                clean_headers.append(f"Col {len(clean_headers) + 1}")
+                                            clean_headers = clean_headers[:max_cols]
+
+                                            seen = {}
+                                            unique_headers = []
+                                            for h in clean_headers:
+                                                base = h if h else "Column"
+                                                if base in seen:
+                                                    seen[base] += 1
+                                                    unique_headers.append(f"{base}_{seen[base]}")
+                                                else:
+                                                    seen[base] = 1
+                                                    unique_headers.append(base)
+
+                                            normalized_rows = []
+                                            for r in clean_rows:
+                                                if len(r) < max_cols:
+                                                    r = r + [""] * (max_cols - len(r))
+                                                normalized_rows.append(r[:max_cols])
+
+                                            df = pd.DataFrame(normalized_rows, columns=unique_headers)
+                                            st.dataframe(df, use_container_width=True)
+                                    except Exception as tbl_err:
+                                        st.caption(f"Could not render table as spreadsheet: {tbl_err}")
+                                        if rows:
+                                            st.write(rows)
 
                         with st.expander("📄 View Raw JSON Output"):
                             st.json(data)
                     else:
-                        st.error(f"Extraction error: {res.text}")
-                except Exception as e:
-                    st.error(f"Failed to connect: {e}")
+                        try:
+                            err_msg = res.json().get("detail", res.text)
+                        except Exception:
+                            err_msg = res.text
+                        st.error(f"Extraction error ({res.status_code}): {err_msg}")

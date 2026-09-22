@@ -4,11 +4,12 @@ import json
 import shutil
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import os
 import gc
 import logging
@@ -21,6 +22,7 @@ logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICA
 logger = logging.getLogger("docmind.api")
 
 MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB strict upload cap
+MAX_VOICE_SIZE_BYTES = 15 * 1024 * 1024   # 15 MB voice query cap
 
 from app.core.loader import load_document
 from app.core.chunker import chunk_text
@@ -30,6 +32,13 @@ from app.core.doc_editor import DocumentEditor
 from app.core.speech import transcribe_audio
 from app.core.tts import synthesize_speech
 from app.core.resilience import GeminiServiceError
+from app.core.auth import (
+    authenticate_user,
+    register_user,
+    validate_session_token,
+    generate_session_token,
+    get_or_create_demo_token,
+)
 
 # =========================================================
 # APP CONFIGURATION
@@ -54,6 +63,47 @@ intelligence = DocumentIntelligence()
 editor = DocumentEditor()
 
 # =========================================================
+# AUTHENTICATION & SECURITY DEPENDENCY
+# =========================================================
+
+security_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    token: Optional[str] = Query(None),
+) -> Dict[str, Any]:
+    """
+    Validates token from Authorization Bearer header, X-API-Key header, or token query param.
+    Rejects unauthenticated requests with HTTP 401.
+    """
+    auth_token = None
+    if credentials and credentials.credentials:
+        auth_token = credentials.credentials
+    elif x_api_key:
+        auth_token = x_api_key
+    elif token:
+        auth_token = token
+
+    if not auth_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please provide a Bearer token or API key.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = validate_session_token(auth_token)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+# =========================================================
 # GLOBAL EXCEPTION HANDLER FOR GEMINI RESILIENCE
 # =========================================================
 
@@ -68,6 +118,7 @@ async def gemini_service_exception_handler(request: Request, exc: GeminiServiceE
             "detail": "Automatic retries were exhausted. Please retry after a brief delay.",
         },
     )
+
 
 # =========================================================
 # DIRECTORIES
@@ -85,9 +136,21 @@ AUDIO_OUT_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR = Path("app/data/generated")
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+
 # =========================================================
 # REQUEST MODELS
 # =========================================================
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
 
 class QueryRequest(BaseModel):
     question: str
@@ -120,11 +183,16 @@ class DocumentEditRequest(BaseModel):
     instruction: str
     export_format: str = "docx"
     auto_index: bool = True
-    edit_mode: str = "append"  # "append" (fast, lightweight, safe) or "revise"
+    edit_mode: str = "append"  # "append" or "revise"
+
+
+class SpeakRequest(BaseModel):
+    text: Optional[str] = None
+    language: Optional[str] = "en"
 
 
 # =========================================================
-# ROOT & HEALTH ENDPOINTS
+# ROOT & HEALTH ENDPOINTS (Public)
 # =========================================================
 
 @app.get("/")
@@ -147,11 +215,49 @@ def health():
 
 
 # =========================================================
-# 1. UPLOAD & INDEX DOCUMENT
+# AUTHENTICATION ENDPOINTS
+# =========================================================
+
+@app.post("/auth/login")
+def login_endpoint(req: LoginRequest):
+    success, msg, user_dict = authenticate_user(req.email, req.password)
+    if not success or not user_dict:
+        raise HTTPException(status_code=401, detail=msg)
+    return {
+        "status": "success",
+        "message": msg,
+        "user": user_dict,
+        "token": user_dict.get("token"),
+    }
+
+
+@app.post("/auth/register")
+def register_endpoint(req: RegisterRequest):
+    success, msg, user_dict = register_user(req.name, req.email, req.password)
+    if not success or not user_dict:
+        raise HTTPException(status_code=400, detail=msg)
+    return {
+        "status": "success",
+        "message": msg,
+        "user": user_dict,
+        "token": user_dict.get("token"),
+    }
+
+
+@app.get("/auth/me")
+def get_current_user_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
+    return {"status": "success", "user": current_user}
+
+
+# =========================================================
+# 1. UPLOAD & INDEX DOCUMENT (Strictly Scoped by User)
 # =========================================================
 
 @app.post("/upload")
-def upload_document(file: UploadFile = File(...)):
+def upload_document(
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
 
@@ -172,6 +278,7 @@ def upload_document(file: UploadFile = File(...)):
             detail=f"Unsupported file format '{extension}'. Supported formats: PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, HTML, JSON, PNG, JPG.",
         )
 
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
     document_id = uuid.uuid4().hex
     stored_filename = f"{document_id}_{original_filename}"
     dest = UPLOAD_DIR / stored_filename
@@ -207,6 +314,7 @@ def upload_document(file: UploadFile = File(...)):
                     "source": original_filename,
                     "page": 1,
                     "char_count": len(original_filename),
+                    "user_email": user_email,
                 }
             }]
 
@@ -214,6 +322,7 @@ def upload_document(file: UploadFile = File(...)):
             metadata = record.get("metadata", {})
             metadata["document_id"] = document_id
             metadata["source"] = original_filename
+            metadata["user_email"] = user_email
             record["metadata"] = metadata
 
         chunks = chunk_text(records)
@@ -226,12 +335,18 @@ def upload_document(file: UploadFile = File(...)):
                     "source": original_filename,
                     "page": 1,
                     "chunk": 0,
+                    "user_email": user_email,
                 }
             }]
+        else:
+            for c in chunks:
+                c_meta = c.get("metadata", {})
+                c_meta["user_email"] = user_email
+                c["metadata"] = c_meta
 
-        pipeline.ingest(chunks)
+        pipeline.ingest(chunks, user_email=user_email)
 
-        # Proactively scan for actions, deadlines & consequences (resilient to model rate-limits)
+        # Proactively scan for actions, deadlines & consequences
         action_alert = {"requires_action": False, "urgency": "none"}
         try:
             doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
@@ -269,12 +384,16 @@ def upload_document(file: UploadFile = File(...)):
 
 
 # =========================================================
-# 2. ASK QUESTION (CHATGPT-STYLE MASTER RAG)
+# 2. ASK QUESTION (CHATGPT-STYLE MASTER RAG - User Scoped)
 # =========================================================
 
 @app.post("/ask")
-def ask_question(req: QueryRequest):
+def ask_question(
+    req: QueryRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     try:
+        user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
         target_docs = req.document_ids or []
         if req.document_id and req.document_id not in target_docs:
             target_docs.append(req.document_id)
@@ -285,6 +404,7 @@ def ask_question(req: QueryRequest):
             lang_hint=req.lang_hint,
             document_ids=target_docs if target_docs else None,
             history=req.history,
+            user_email=user_email,
         )
         return result
     except GeminiServiceError as ge:
@@ -294,7 +414,7 @@ def ask_question(req: QueryRequest):
 
 
 # =========================================================
-# 3. ASK BY VOICE (SPEECH -> RAG -> TTS)
+# 3. ASK BY VOICE (Strict 15 MB Cap & Authenticated)
 # =========================================================
 
 @app.post("/ask-voice")
@@ -303,15 +423,33 @@ def ask_voice_question(
     speak_reply: bool = True,
     document_ids: Optional[str] = None,
     history: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Audio file missing.")
 
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
     temp_path = TEMP_AUDIO_DIR / f"{uuid.uuid4().hex}.wav"
 
     try:
+        # Enforce strict 15 MB audio stream cap
+        total_audio_bytes = 0
+        chunk_buffer = 1024 * 256  # 256 KB buffer
         with open(temp_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while True:
+                chunk = file.file.read(chunk_buffer)
+                if not chunk:
+                    break
+                total_audio_bytes += len(chunk)
+                if total_audio_bytes > MAX_VOICE_SIZE_BYTES:
+                    f.close()
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Audio file size exceeds the 15 MB limit. Please record a shorter message.",
+                    )
+                f.write(chunk)
 
         transcription = transcribe_audio(str(temp_path))
         question_text = transcription.get("text", "").strip()
@@ -340,6 +478,7 @@ def ask_voice_question(
             lang_hint=detected_lang,
             document_ids=parsed_docs if parsed_docs else None,
             history=parsed_history,
+            user_email=user_email,
         )
 
         result["transcribed_question"] = question_text
@@ -355,6 +494,8 @@ def ask_voice_question(
 
         return result
 
+    except HTTPException:
+        raise
     except GeminiServiceError as ge:
         raise HTTPException(status_code=ge.status_code, detail=str(ge))
     except Exception as e:
@@ -368,12 +509,16 @@ def ask_voice_question(
 
 
 # =========================================================
-# 8. DOCUMENT SUMMARIZATION
+# 4. DOCUMENT SUMMARIZATION (User Scoped)
 # =========================================================
 
 @app.post("/summarize")
-def summarize_doc(req: SummarizeRequest):
-    chunks = pipeline.store.get_document_chunks(req.document_id)
+def summarize_doc(
+    req: SummarizeRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    chunks = pipeline.store.get_document_chunks(req.document_id, user_email=user_email)
     if not chunks:
         raise HTTPException(status_code=404, detail="Document not found or has no indexed content.")
 
@@ -390,16 +535,20 @@ def summarize_doc(req: SummarizeRequest):
 
 
 # =========================================================
-# 9. DOCUMENT COMPARISON
+# 5. DOCUMENT COMPARISON (User Scoped)
 # =========================================================
 
 @app.post("/compare")
-def compare_docs(req: CompareRequest):
+def compare_docs(
+    req: CompareRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     if len(req.document_ids) < 2:
         raise HTTPException(status_code=400, detail="Please select at least 2 documents to compare.")
 
-    chunks_a = pipeline.store.get_document_chunks(req.document_ids[0])
-    chunks_b = pipeline.store.get_document_chunks(req.document_ids[1])
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    chunks_a = pipeline.store.get_document_chunks(req.document_ids[0], user_email=user_email)
+    chunks_b = pipeline.store.get_document_chunks(req.document_ids[1], user_email=user_email)
 
     if not chunks_a or not chunks_b:
         raise HTTPException(status_code=404, detail="One or both selected documents could not be found.")
@@ -423,12 +572,16 @@ def compare_docs(req: CompareRequest):
 
 
 # =========================================================
-# 10. STRUCTURED INFORMATION EXTRACTION
+# 6. STRUCTURED INFORMATION EXTRACTION (User Scoped)
 # =========================================================
 
 @app.post("/extract")
-def extract_doc_data(req: ExtractRequest):
-    chunks = pipeline.store.get_document_chunks(req.document_id)
+def extract_doc_data(
+    req: ExtractRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    chunks = pipeline.store.get_document_chunks(req.document_id, user_email=user_email)
     if not chunks:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -444,75 +597,100 @@ def extract_doc_data(req: ExtractRequest):
 
 
 # =========================================================
-# [NEW] DOCUMENT STUDIO: EDIT & EXPORT TO PDF/DOCX
+# 7. DOCUMENT STUDIO: EDIT & EXPORT (User Scoped)
 # =========================================================
 
 @app.post("/document/edit")
-def edit_document(req: DocumentEditRequest):
-    chunks = pipeline.store.get_document_chunks(req.document_id)
-    if not chunks:
-        raise HTTPException(status_code=404, detail="Document not found.")
+def edit_document(
+    req: DocumentEditRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    try:
+        user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+        chunks = pipeline.store.get_document_chunks(req.document_id, user_email=user_email)
+        if not chunks:
+            raise HTTPException(status_code=404, detail="Document not found.")
 
-    full_text = "\n\n".join([c["text"] for c in chunks])
-    base_filename = chunks[0].get("source", "Document")
-    stem_name = Path(base_filename).stem
+        full_text = "\n\n".join([c["text"] for c in chunks])
+        base_filename = chunks[0].get("source", "Document")
+        stem_name = Path(base_filename).stem
 
-    # 1. Generate updated content via prompt
-    updated_markdown = editor.update_document(
-        original_text=full_text,
-        instruction=req.instruction,
-        document_title=f"Updated: {stem_name}",
-        edit_mode=req.edit_mode,
-    )
+        # 1. Generate updated content via prompt
+        updated_markdown = editor.update_document(
+            original_text=full_text,
+            instruction=req.instruction,
+            document_title=f"Updated: {stem_name}",
+            edit_mode=req.edit_mode,
+        )
 
-    new_doc_id = uuid.uuid4().hex
-    fmt = req.export_format.lower()
-    if fmt not in ["docx", "pdf"]:
-        fmt = "docx"
+        new_doc_id = uuid.uuid4().hex
+        fmt = req.export_format.lower()
+        if fmt not in ["docx", "pdf"]:
+            fmt = "docx"
 
-    out_filename = f"updated_{stem_name}_{new_doc_id[:8]}.{fmt}"
-    out_path = GENERATED_DIR / out_filename
+        out_filename = f"updated_{stem_name}_{new_doc_id[:8]}.{fmt}"
+        out_path = GENERATED_DIR / out_filename
 
-    # 2. Export to DOCX or PDF
-    if fmt == "docx":
-        editor.export_to_docx(updated_markdown, str(out_path), title=f"Updated: {stem_name}")
-    else:
-        editor.export_to_pdf(updated_markdown, str(out_path), title=f"Updated: {stem_name}")
+        # 2. Export to DOCX or PDF
+        if fmt == "docx":
+            editor.export_to_docx(updated_markdown, str(out_path), title=f"Updated: {stem_name}")
+        else:
+            editor.export_to_pdf(updated_markdown, str(out_path), title=f"Updated: {stem_name}")
 
-    # 3. Auto-index the new document if requested
-    indexed_chunks_count = 0
-    if req.auto_index and out_path.exists():
-        try:
-            records = load_document(str(out_path))
-            for record in records:
-                meta = record.get("metadata", {})
-                meta["document_id"] = new_doc_id
-                meta["source"] = out_filename
-                record["metadata"] = meta
-            new_chunks = chunk_text(records)
-            pipeline.ingest(new_chunks)
-            indexed_chunks_count = len(new_chunks)
-        except Exception as e:
-            print(f"Auto-index error for generated document: {e}")
+        # 3. Auto-index the new document if requested with user isolation
+        indexed_chunks_count = 0
+        if req.auto_index and out_path.exists():
+            try:
+                records = load_document(str(out_path))
+                for record in records:
+                    meta = record.get("metadata", {})
+                    meta["document_id"] = new_doc_id
+                    meta["source"] = out_filename
+                    meta["user_email"] = user_email
+                    record["metadata"] = meta
+                new_chunks = chunk_text(records)
+                for c in new_chunks:
+                    c_meta = c.get("metadata", {})
+                    c_meta["user_email"] = user_email
+                    c["metadata"] = c_meta
+                pipeline.ingest(new_chunks, user_email=user_email)
+                indexed_chunks_count = len(new_chunks)
+            except Exception as e:
+                logger.error(f"Auto-index error for generated document: {e}")
 
-    return {
-        "status": "success",
-        "filename": out_filename,
-        "new_document_id": new_doc_id,
-        "download_url": f"/document/download/{out_filename}",
-        "updated_content": updated_markdown[:2000] + ("..." if len(updated_markdown) > 2000 else ""),
-        "indexed_chunks": indexed_chunks_count,
-    }
+        return {
+            "status": "success",
+            "filename": out_filename,
+            "new_document_id": new_doc_id,
+            "download_url": f"/document/download/{out_filename}",
+            "updated_content": updated_markdown[:2000] + ("..." if len(updated_markdown) > 2000 else ""),
+            "indexed_chunks": indexed_chunks_count,
+        }
+    except HTTPException:
+        raise
+    except GeminiServiceError as ge:
+        logger.error(f"Gemini service error in /document/edit: {ge}")
+        raise HTTPException(status_code=ge.status_code, detail=str(ge))
+    except Exception as e:
+        logger.error(f"Error in /document/edit: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate updated document: {str(e)}")
 
 
 @app.get("/document/download/{filename}")
-def download_generated_document(filename: str):
+def download_generated_document(
+    filename: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     safe_filename = Path(filename).name
     file_path = GENERATED_DIR / safe_filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found.")
 
-    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if safe_filename.endswith(".docx") else "application/pdf"
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if safe_filename.endswith(".docx")
+        else "application/pdf"
+    )
     return FileResponse(
         str(file_path),
         media_type=media_type,
@@ -522,12 +700,19 @@ def download_generated_document(filename: str):
 
 
 # =========================================================
-# DOCUMENT MANAGEMENT & DELETE
+# 8. DOCUMENT MANAGEMENT & DELETE (User Scoped)
 # =========================================================
 
 @app.delete("/documents/{document_id}")
-def delete_document_api(document_id: str):
-    deleted = pipeline.store.delete_document(document_id)
+def delete_document_api(
+    document_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    deleted = pipeline.store.delete_document(document_id, user_email=user_email)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found or you do not have permission to delete it.")
 
     for file_path in UPLOAD_DIR.glob(f"{document_id}_*"):
         try:
@@ -535,30 +720,31 @@ def delete_document_api(document_id: str):
         except Exception:
             pass
 
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Document not found or could not be removed.")
-
     return {
         "status": "success",
         "deleted_document_id": document_id,
-        "message": "Document successfully deleted from vector index and storage.",
+        "message": "Document successfully deleted from your personal index and storage.",
     }
 
 
 @app.get("/documents")
-def list_documents():
+def list_documents(current_user: Dict[str, Any] = Depends(get_current_user)):
     try:
-        return {"documents": pipeline.store.list_documents()}
+        user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+        return {"documents": pipeline.store.list_documents(user_email=user_email)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # =========================================================
-# AUDIO UTILITIES
+# 9. AUDIO UTILITIES (Authenticated)
 # =========================================================
 
 @app.get("/audio/{filename}")
-def get_audio(filename: str):
+def get_audio(
+    filename: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     safe_filename = Path(filename).name
     file_path = AUDIO_OUT_DIR / safe_filename
     if not file_path.exists():
@@ -566,13 +752,13 @@ def get_audio(filename: str):
     return FileResponse(str(file_path), media_type="audio/mpeg")
 
 
-class SpeakRequest(BaseModel):
-    text: Optional[str] = None
-    language: Optional[str] = "en"
-
-
 @app.post("/speak")
-def speak_endpoint(req: Optional[SpeakRequest] = None, text: Optional[str] = None, language: str = "en"):
+def speak_endpoint(
+    req: Optional[SpeakRequest] = None,
+    text: Optional[str] = None,
+    language: str = "en",
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     target_text = ""
     target_lang = "en"
     if req and req.text:
@@ -585,7 +771,6 @@ def speak_endpoint(req: Optional[SpeakRequest] = None, text: Optional[str] = Non
     if not target_text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
-    # Clean markdown and HTML tags for smooth natural speech synthesis
     import re
     clean_text = re.sub(r"<[^>]+>", " ", target_text)
     clean_text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", clean_text)
@@ -601,15 +786,17 @@ def speak_endpoint(req: Optional[SpeakRequest] = None, text: Optional[str] = Non
 
 
 # =========================================================
-# 10. PROACTIVE ACTION & DEADLINE ALERT ENDPOINT
+# 10. PROACTIVE ACTION & DEADLINE ALERT (User Scoped)
 # =========================================================
 
 @app.get("/document/{document_id}/action-alert")
-def get_action_alert(document_id: str, language: str = "en"):
-    """
-    Returns proactive action & deadline alert for an indexed document in English, Hindi, or Gujarati.
-    """
-    chunks = pipeline.store.get_document_chunks(document_id)
+def get_action_alert(
+    document_id: str,
+    language: str = "en",
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    chunks = pipeline.store.get_document_chunks(document_id, user_email=user_email)
     if not chunks:
         raise HTTPException(status_code=404, detail="Document not found or has no indexed content.")
 

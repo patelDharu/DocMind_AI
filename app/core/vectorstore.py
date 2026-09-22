@@ -51,12 +51,14 @@ class VectorStore:
             ):
                 metadata = metadata or {}
                 document_id = str(metadata.get("document_id", metadata.get("source", "unknown")))
+                user_email = str(metadata.get("user_email", "demo@docmind.ai")).lower()
                 self.bm25_docs.append({
                     "text": doc,
                     "source": metadata.get("source", "unknown"),
                     "page": int(metadata.get("page", 1)),
                     "chunk": int(metadata.get("chunk", 0)),
                     "document_id": document_id,
+                    "user_email": user_email,
                 })
 
             self._rebuild_bm25()
@@ -82,31 +84,30 @@ class VectorStore:
     # ADD CHUNKS
     # =========================================================
 
-    def add_chunks(self, chunks: List[Dict[str, Any]]):
+    def add_chunks(self, chunks: List[Dict[str, Any]], user_email: str = "demo@docmind.ai"):
         if not chunks:
             return
 
-        # 1. BM25 indexing: index 100% of all chunks!
-        # BM25 is local in-memory, ultra-fast (takes 5ms), uses negligible RAM,
-        # ensuring every word across large 15MB files is 100% keyword searchable.
+        clean_email = user_email.strip().lower() if user_email else "demo@docmind.ai"
+
+        # 1. BM25 indexing: index 100% of all chunks with user isolation!
         for chunk in chunks:
             meta = chunk.get("metadata", {})
             doc_id = str(meta.get("document_id", meta.get("source", "unknown")))
+            meta["user_email"] = clean_email
+            chunk["metadata"] = meta
             self.bm25_docs.append({
                 "text": chunk["text"],
                 "source": str(meta.get("source", "unknown")),
                 "page": int(meta.get("page", 1)),
                 "chunk": int(meta.get("chunk", 0)),
                 "document_id": doc_id,
+                "user_email": clean_email,
             })
 
         self._rebuild_bm25()
 
         # 2. Vector indexing with smart chunk budgeting:
-        # If a document produces more than 120 chunks (huge document),
-        # budget vector embedding to the top 120 representative chunks
-        # (first 80 chunks covering intro/clauses + 40 evenly sampled chunks).
-        # This keeps vector embedding under 6 seconds and prevents reverse proxy 502 timeouts.
         MAX_VECTOR_CHUNKS = 120
         if len(chunks) > MAX_VECTOR_CHUNKS:
             primary_chunks = chunks[:80]
@@ -130,6 +131,7 @@ class VectorStore:
                 "page": int(meta.get("page", 1)),
                 "chunk": int(meta.get("chunk", 0)),
                 "document_id": doc_id,
+                "user_email": clean_email,
             })
 
         # STRICT GUARANTEE: Never let ChromaDB fail on mismatched ids vs embeddings
@@ -172,7 +174,7 @@ class VectorStore:
                 raise e
 
     # =========================================================
-    # ADVANCED HYBRID SEARCH (RRF + Multi-Doc Scope)
+    # ADVANCED HYBRID SEARCH (Semantic AI + RRF + User Isolation)
     # =========================================================
 
     def search(
@@ -180,6 +182,7 @@ class VectorStore:
         query: str,
         top_k: int = 8,
         document_ids: List[str] | str | None = None,
+        user_email: str | None = None,
         min_relevance_threshold: float = 0.05,
     ) -> List[Dict[str, Any]]:
         if self.collection.count() == 0:
@@ -191,6 +194,8 @@ class VectorStore:
         elif isinstance(document_ids, list) and len(document_ids) > 0:
             target_ids = [str(d).strip() for d in document_ids if str(d).strip()]
 
+        clean_email = user_email.strip().lower() if user_email else None
+
         # 1. Semantic Dense Search (ChromaDB)
         query_embedding = self.embedder.embed_query(query)
         candidate_count = min(max(top_k * 3, 25), self.collection.count())
@@ -201,16 +206,37 @@ class VectorStore:
             "include": ["documents", "metadatas", "distances"],
         }
 
-        if target_ids:
+        # Build where clause with user isolation
+        where_filter = None
+        if clean_email and target_ids:
             if len(target_ids) == 1:
-                query_kwargs["where"] = {"document_id": target_ids[0]}
+                where_filter = {"$and": [{"user_email": clean_email}, {"document_id": target_ids[0]}]}
             else:
-                query_kwargs["where"] = {"document_id": {"$in": target_ids}}
+                where_filter = {"$and": [{"user_email": clean_email}, {"document_id": {"$in": target_ids}}]}
+        elif clean_email:
+            where_filter = {"user_email": clean_email}
+        elif target_ids:
+            if len(target_ids) == 1:
+                where_filter = {"document_id": target_ids[0]}
+            else:
+                where_filter = {"document_id": {"$in": target_ids}}
+
+        if where_filter:
+            query_kwargs["where"] = where_filter
 
         try:
             semantic_results = self.collection.query(**query_kwargs)
         except Exception:
-            semantic_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            # Fallback if unindexed user_email in older collections
+            if where_filter and "user_email" in str(where_filter) and target_ids:
+                try:
+                    fallback_where = {"document_id": target_ids[0]} if len(target_ids) == 1 else {"document_id": {"$in": target_ids}}
+                    query_kwargs["where"] = fallback_where
+                    semantic_results = self.collection.query(**query_kwargs)
+                except Exception:
+                    semantic_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            else:
+                semantic_results = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
         semantic_ranked = []
         docs_list = semantic_results.get("documents", [[]])[0]
@@ -219,6 +245,10 @@ class VectorStore:
 
         for doc, meta, dist in zip(docs_list, meta_list, dist_list):
             meta = meta or {}
+            doc_owner = str(meta.get("user_email", "demo@docmind.ai")).lower()
+            if clean_email and doc_owner != clean_email:
+                continue
+
             cosine_sim = max(0.0, 1.0 - float(dist))
             semantic_ranked.append({
                 "text": doc,
@@ -227,18 +257,19 @@ class VectorStore:
                 "chunk": int(meta.get("chunk", 0)),
                 "document_id": meta.get("document_id", "unknown"),
                 "dense_score": cosine_sim,
+                "user_email": doc_owner,
             })
 
-        # 2. Sparse Keyword Search (BM25)
+        # 2. Sparse Keyword Search (BM25) with user scoping
         bm25_ranked = []
         if self.bm25 and self.bm25_docs:
-            if target_ids:
-                candidate_indices = [
-                    idx for idx, d in enumerate(self.bm25_docs)
-                    if d["document_id"] in target_ids
-                ]
-            else:
-                candidate_indices = list(range(len(self.bm25_docs)))
+            candidate_indices = []
+            for idx, d in enumerate(self.bm25_docs):
+                if clean_email and d.get("user_email") != clean_email:
+                    continue
+                if target_ids and d["document_id"] not in target_ids:
+                    continue
+                candidate_indices.append(idx)
 
             if candidate_indices:
                 tokens = query.lower().split()
@@ -260,9 +291,10 @@ class VectorStore:
                         "chunk": d["chunk"],
                         "document_id": d["document_id"],
                         "bm25_score": float(sc) / max_bm25,
+                        "user_email": d.get("user_email", "demo@docmind.ai"),
                     })
 
-        # 3. Reciprocal Rank Fusion (RRF)
+        # 3. Reciprocal Rank Fusion (RRF) & Semantic AI Scoring
         rrf_constant = 60
         rrf_scores: Dict[tuple, Dict[str, Any]] = {}
 
@@ -296,12 +328,25 @@ class VectorStore:
 
         merged_results = []
         for key, item in rrf_scores.items():
-            composite_score = (
-                item["dense_score"] * 0.60 +
-                item["bm25_score"] * 0.25 +
-                min(item["rrf_score"] * 30, 0.15)
+            dense_sc = item.get("dense_score", 0.0)
+            bm25_sc = item.get("bm25_score", 0.0)
+            rrf_sc = item.get("rrf_score", 0.0)
+
+            # SEMANTIC AI SCORING:
+            # Dense vectors understand semantics, intent, synonyms, and multilingual expressions.
+            # Keyword BM25 adds exact term precision when available.
+            composite = (
+                dense_sc * 0.70 +
+                bm25_sc * 0.20 +
+                min(rrf_sc * 30, 0.10)
             )
-            item["score"] = round(float(composite_score), 4)
+
+            # Strong semantic match preservation:
+            # If dense similarity is solid (>= 0.35), guarantee it isn't diluted when exact keywords are missing.
+            if dense_sc >= 0.35:
+                composite = max(composite, dense_sc * 0.90)
+
+            item["score"] = round(float(composite), 4)
 
             if item["score"] >= min_relevance_threshold:
                 merged_results.append(item)
@@ -310,15 +355,20 @@ class VectorStore:
         return merged_results[:top_k]
 
     # =========================================================
-    # DOCUMENT MANAGEMENT & RETRIEVAL
+    # DOCUMENT MANAGEMENT & RETRIEVAL (Scoped by user_email)
     # =========================================================
 
-    def list_documents(self) -> List[Dict[str, Any]]:
+    def list_documents(self, user_email: str | None = None) -> List[Dict[str, Any]]:
+        clean_email = user_email.strip().lower() if user_email else None
         existing = self.collection.get(include=["metadatas"])
         docs = {}
 
         for meta in existing.get("metadatas", []):
             meta = meta or {}
+            doc_owner = str(meta.get("user_email", "demo@docmind.ai")).lower()
+            if clean_email and doc_owner != clean_email:
+                continue
+
             doc_id = meta.get("document_id")
             source = meta.get("source", "unknown")
             if not doc_id:
@@ -328,34 +378,52 @@ class VectorStore:
                     "document_id": doc_id,
                     "filename": source,
                     "chunks_count": 0,
+                    "user_email": doc_owner,
                 }
             docs[doc_id]["chunks_count"] += 1
 
         return list(docs.values())
 
-    def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
-        res = self.collection.get(
-            where={"document_id": document_id},
-            include=["documents", "metadatas"],
-        )
+    def get_document_chunks(self, document_id: str, user_email: str | None = None) -> List[Dict[str, Any]]:
+        clean_email = user_email.strip().lower() if user_email else None
+        where_cond: Dict[str, Any] = {"document_id": document_id}
+
+        try:
+            res = self.collection.get(
+                where=where_cond,
+                include=["documents", "metadatas"],
+            )
+        except Exception:
+            res = {"documents": [], "metadatas": []}
+
         items = []
         for doc, meta in zip(res.get("documents", []), res.get("metadatas", [])):
             meta = meta or {}
+            doc_owner = str(meta.get("user_email", "demo@docmind.ai")).lower()
+            if clean_email and doc_owner != clean_email:
+                continue
             items.append({
                 "text": doc,
                 "chunk": int(meta.get("chunk", 0)),
                 "page": int(meta.get("page", 1)),
                 "source": meta.get("source", "unknown"),
+                "user_email": doc_owner,
             })
         items.sort(key=lambda x: x["chunk"])
         return items
 
-    def delete_document(self, document_id: str) -> bool:
+    def delete_document(self, document_id: str, user_email: str | None = None) -> bool:
+        clean_email = user_email.strip().lower() if user_email else None
         try:
+            if clean_email:
+                chunks = self.get_document_chunks(document_id, user_email=clean_email)
+                if not chunks:
+                    return False
+
             self.collection.delete(where={"document_id": document_id})
             self.bm25_docs = [
                 d for d in self.bm25_docs
-                if d.get("document_id") != document_id
+                if not (d.get("document_id") == document_id and (not clean_email or d.get("user_email") == clean_email))
             ]
             self._rebuild_bm25()
             return True
@@ -363,9 +431,15 @@ class VectorStore:
             print(f"Error deleting document {document_id}: {e}")
             return False
 
-    def clear_all(self):
-        ids = self.collection.get()["ids"]
-        if ids:
-            self.collection.delete(ids=ids)
-        self.bm25_docs = []
-        self.bm25 = None
+    def clear_all(self, user_email: str | None = None):
+        clean_email = user_email.strip().lower() if user_email else None
+        if clean_email:
+            docs = self.list_documents(user_email=clean_email)
+            for d in docs:
+                self.delete_document(d["document_id"], user_email=clean_email)
+        else:
+            ids = self.collection.get()["ids"]
+            if ids:
+                self.collection.delete(ids=ids)
+            self.bm25_docs = []
+            self.bm25 = None

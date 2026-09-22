@@ -232,6 +232,7 @@ Provide the output strictly as valid JSON matching this schema:
   ],
   "summary_points": ["..."]
 }}
+CRITICAL RULE: For tables_detected, every row array in "rows" MUST contain exactly the same number of elements as the "headers" array.
 """.strip()
 
         client = get_genai_client()
@@ -247,7 +248,33 @@ Provide the output strictly as valid JSON matching this schema:
         )
 
         try:
-            return json.loads(json_raw)
+            data = json.loads(json_raw)
+            if isinstance(data, dict) and "tables_detected" in data and isinstance(data["tables_detected"], list):
+                for tbl in data["tables_detected"]:
+                    if isinstance(tbl, dict):
+                        headers = tbl.get("headers", [])
+                        rows = tbl.get("rows", [])
+                        if headers or rows:
+                            clean_headers = [str(h).strip() if h is not None else "" for h in (headers or [])]
+                            clean_rows = []
+                            for r in (rows or []):
+                                if isinstance(r, list):
+                                    clean_rows.append([str(c) if c is not None else "" for c in r])
+                                else:
+                                    clean_rows.append([str(r)])
+                            max_cols = max(len(clean_headers), max((len(r) for r in clean_rows), default=0))
+                            if max_cols > 0:
+                                while len(clean_headers) < max_cols:
+                                    clean_headers.append(f"Col {len(clean_headers) + 1}")
+                                clean_headers = clean_headers[:max_cols]
+                                norm_rows = []
+                                for r in clean_rows:
+                                    if len(r) < max_cols:
+                                        r = r + [""] * (max_cols - len(r))
+                                    norm_rows.append(r[:max_cols])
+                                tbl["headers"] = clean_headers
+                                tbl["rows"] = norm_rows
+            return data
         except Exception:
             return {
                 "document": filename,

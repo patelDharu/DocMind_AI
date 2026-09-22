@@ -60,6 +60,11 @@ class DocumentLoader:
         if not docs:
             docs = DocumentLoader._ocr_with_gemini(file_path)
 
+        # Sanitize text across all records to strip XML-incompatible control characters
+        for doc in docs:
+            if "text" in doc and isinstance(doc["text"], str):
+                doc["text"] = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f]", "", doc["text"])
+
         return docs
 
     @staticmethod
@@ -212,17 +217,42 @@ class DocumentLoader:
                     for page_idx in range(pages_to_read):
                         page = pdf.pages[page_idx]
                         page_content_parts = []
-                        raw_text = page.extract_text() or ""
-                        if raw_text.strip():
-                            page_content_parts.append(raw_text.strip())
 
-                            if extract_tables_flag:
-                                tables = page.extract_tables()
-                                if tables:
-                                    for t_idx, table in enumerate(tables, start=1):
-                                        md_table = DocumentLoader._format_table_as_markdown(table)
-                                        if md_table:
-                                            page_content_parts.append(f"\n[Table {t_idx} on Page {page_idx + 1}]\n{md_table}\n")
+                        # Check for tables on this page
+                        tables = []
+                        if extract_tables_flag:
+                            try:
+                                tables = page.extract_tables() or []
+                            except Exception:
+                                tables = []
+
+                        if tables:
+                            # If tables exist, try extracting text outside table bounding boxes to prevent duplicate text
+                            try:
+                                found_tables = page.find_tables()
+                                if found_tables:
+                                    def not_within_bboxes(obj):
+                                        def obj_in_bbox(bbox):
+                                            return (obj.get("x0", 0) >= bbox[0] and obj.get("top", 0) >= bbox[1] and obj.get("x1", 0) <= bbox[2] and obj.get("bottom", 0) <= bbox[3])
+                                        return not any(obj_in_bbox(t.bbox) for t in found_tables)
+                                    filtered_page = page.filter(not_within_bboxes)
+                                    non_table_text = (filtered_page.extract_text() or "").strip()
+                                else:
+                                    non_table_text = (page.extract_text() or "").strip()
+                            except Exception:
+                                non_table_text = (page.extract_text() or "").strip()
+
+                            if non_table_text:
+                                page_content_parts.append(non_table_text)
+
+                            for t_idx, table in enumerate(tables, start=1):
+                                md_table = DocumentLoader._format_table_as_markdown(table)
+                                if md_table:
+                                    page_content_parts.append(md_table)
+                        else:
+                            raw_text = (page.extract_text() or "").strip()
+                            if raw_text:
+                                page_content_parts.append(raw_text)
 
                         full_page_text = "\n\n".join(page_content_parts).strip()
                         if full_page_text:
@@ -232,7 +262,7 @@ class DocumentLoader:
                                     "source": filename,
                                     "page": page_idx + 1,
                                     "char_count": len(full_page_text),
-                                    "has_tables": extract_tables_flag,
+                                    "has_tables": bool(tables),
                                 },
                             })
             except Exception as e:

@@ -67,13 +67,14 @@ class RAGPipeline:
         self.rewriter = QueryRewriter()
         self.model = MODEL_NAME
 
-    def ingest(self, chunks: List[Dict[str, Any]]):
-        self.store.add_chunks(chunks)
+    def ingest(self, chunks: List[Dict[str, Any]], user_email: str = "demo@docmind.ai"):
+        self.store.add_chunks(chunks, user_email=user_email)
 
-    def _confidence_label(self, top_score: float) -> str:
-        if top_score >= 0.55:
+    def _confidence_label(self, top_score: float, top_dense: float = 0.0) -> str:
+        best = max(top_score, top_dense)
+        if best >= 0.50:
             return "high"
-        elif top_score >= 0.35:
+        elif best >= 0.32:
             return "medium"
         return "low"
 
@@ -107,6 +108,7 @@ class RAGPipeline:
         lang_hint: str | None = None,
         document_ids: List[str] | str | None = None,
         history: List[Dict[str, str]] | None = None,
+        user_email: str | None = None,
     ) -> Dict[str, Any]:
         raw_question = question.strip()
         if not raw_question:
@@ -124,7 +126,7 @@ class RAGPipeline:
         if history and len(history) > 0:
             search_query = self.rewriter.rewrite_query(raw_question, history)
 
-        # 2. HYBRID SEARCH
+        # 2. HYBRID SEARCH (Semantic AI + BM25 + User Isolation)
         target_ids = None
         if isinstance(document_ids, str) and document_ids.strip():
             target_ids = [document_ids.strip()]
@@ -135,12 +137,16 @@ class RAGPipeline:
             query=search_query,
             top_k=top_k,
             document_ids=target_ids,
-            min_relevance_threshold=0.10,
+            user_email=user_email,
+            min_relevance_threshold=0.08,
         )
 
-        # 3. HALLUCINATION PROTECTION: Strict threshold check
+        # 3. HALLUCINATION PROTECTION: Evaluates both composite score & dense semantic similarity
         top_score = retrieved_chunks[0].get("score", 0.0) if retrieved_chunks else 0.0
-        if not retrieved_chunks or top_score < 0.28:
+        top_dense = max((c.get("dense_score", 0.0) for c in retrieved_chunks), default=0.0)
+
+        # Reject only if neither semantic density nor composite relevance indicates a match
+        if not retrieved_chunks or (top_score < 0.22 and top_dense < 0.30):
             return {
                 "answer": NOT_FOUND_MESSAGES.get(detected_lang, NOT_FOUND_MESSAGES["en"]),
                 "sources": [],
@@ -233,7 +239,7 @@ ANSWER INSTRUCTIONS:
         return {
             "answer": answer_text,
             "sources": sources,
-            "confidence": self._confidence_label(top_score),
+            "confidence": self._confidence_label(top_score, top_dense),
             "rewritten_query": search_query if search_query != raw_question else None,
             "detected_language": detected_lang,
         }
