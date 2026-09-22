@@ -1,7 +1,7 @@
 services:
   - type: web
     name: docmind-ai
-    env: docker
+    runtime: docker
     plan: free
     region: oregon
     healthCheckPath: /_stcore/health
