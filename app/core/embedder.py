@@ -58,9 +58,9 @@ class Embedder:
         self.candidate_models = [
             m for m in [
                 custom_model,
+                "text-embedding-004",
                 "gemini-embedding-001",
                 "gemini-embedding-2",
-                "text-embedding-004",
             ] if m
         ]
         self.active_model = self.candidate_models[0]
@@ -95,9 +95,9 @@ class Embedder:
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
-                if "404" in err_str or "not found" in err_str or "not supported" in err_str:
+                if any(k in err_str for k in ["404", "not found", "not supported", "429", "quota", "resource_exhausted"]):
                     logger.warning(
-                        f"Embedding model '{model}' returned 404. Falling back to next candidate..."
+                        f"Embedding model '{model}' unavailable ({type(e).__name__}). Falling back to next candidate..."
                     )
                     continue
                 raise e
@@ -128,9 +128,9 @@ class Embedder:
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
-                if "404" in err_str or "not found" in err_str or "not supported" in err_str:
+                if any(k in err_str for k in ["404", "not found", "not supported", "429", "quota", "resource_exhausted"]):
                     logger.warning(
-                        f"Embedding model '{model}' returned 404. Falling back to next candidate..."
+                        f"Embedding model '{model}' unavailable for batch ({type(e).__name__}). Falling back to next candidate..."
                     )
                     continue
                 raise e

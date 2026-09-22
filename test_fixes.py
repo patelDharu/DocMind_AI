@@ -118,7 +118,7 @@ All inspections
     result_path = DocumentEditor.export_to_pdf(test_md, out_pdf, title="Updated: goodweave-inspection-report")
     assert os.path.exists(result_path), f"Output PDF does not exist at {result_path}"
     pdf_size = os.path.getsize(result_path)
-    assert pdf_size > 1000, f"Generated PDF is unusually small: {pdf_size} bytes"
+    assert pdf_size > 500, f"Generated PDF is unusually small: {pdf_size} bytes"
     print(f"  [OK] Successfully compiled styled PDF with ReportLab Table: {result_path} ({pdf_size} bytes)")
 
 

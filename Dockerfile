@@ -32,4 +32,4 @@ RUN chmod +x start.sh
 EXPOSE 7860
 
 # Launch application
-CMD ["./start.sh"]
+CMD ["bash", "start.sh"]

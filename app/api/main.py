@@ -276,6 +276,14 @@ def upload_document(
         )
 
     user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not gemini_key:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not set on this server. If running on Render, please add your GEMINI_API_KEY under the 'Environment' tab in your Render Dashboard.",
+        )
+
     document_id = uuid.uuid4().hex
     stored_filename = f"{document_id}_{original_filename}"
     dest = UPLOAD_DIR / stored_filename

@@ -610,7 +610,7 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
 
     try:
         files = {"file": (uploaded_file.name, file_bytes)}
-        res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
+        res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=120)
         if res.ok:
             data = res.json()
             doc_id = data["document_id"]
@@ -625,7 +625,12 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
             st.error(f"⚠️ 502 Bad Gateway: The cloud server was briefly busy or restarting. Please retry in a few moments.")
             return None
         else:
-            st.error(f"Upload failed for {uploaded_file.name}: {res.text}")
+            err_msg = res.text
+            try:
+                err_msg = res.json().get("detail", res.text)
+            except Exception:
+                pass
+            st.error(f"⚠️ Upload failed for {uploaded_file.name}: {err_msg}")
             return None
     except requests.exceptions.ConnectionError:
         st.error(f"⚠️ Connection Error: Unable to reach the backend server. If using cloud hosting, it may be waking up. Please retry in a moment.")
@@ -1131,7 +1136,7 @@ with tab_chat:
                     with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
                         try:
                             files = {"file": (fname, file_bytes)}
-                            res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
+                            res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=120)
                             if res.ok:
                                 data = res.json()
                                 new_doc_id = data["document_id"]
@@ -1218,7 +1223,12 @@ with tab_chat:
                             elif res.status_code == 502:
                                 st.error("⚠️ 502 Bad Gateway: The cloud server was briefly busy or restarting. Please retry in a moment.")
                             else:
-                                st.error(f"Upload failed: {res.text}")
+                                err_msg = res.text
+                                try:
+                                    err_msg = res.json().get("detail", res.text)
+                                except Exception:
+                                    pass
+                                st.error(f"⚠️ Upload failed: {err_msg}")
                         except requests.exceptions.ConnectionError:
                             st.error("⚠️ Connection Error: Unable to reach the backend server. If using cloud hosting, it may be waking up. Please retry in a moment.")
                         except requests.exceptions.Timeout:
