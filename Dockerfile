@@ -2,8 +2,7 @@ FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PORT=7860
+    PYTHONDONTWRITEBYTECODE=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -28,8 +27,8 @@ RUN mkdir -p app/data/uploads app/data/audio_in app/data/audio_out app/data/vect
 # Make start script executable
 RUN chmod +x start.sh
 
-# Expose default web port
-EXPOSE 7860
+# Expose default web ports (Render default: 10000)
+EXPOSE 10000 7860
 
 # Launch application
 CMD ["bash", "start.sh"]

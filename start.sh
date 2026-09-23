@@ -28,13 +28,9 @@ for i in {1..40}; do
     sleep 1
 done
 
-# Linux memory allocator optimizations to prevent fragmentation & OOM on Render 512 MB tier
-export PYTHONMALLOC=malloc
-export MALLOC_ARENA_MAX=2
-
-PORT="${PORT:-7860}"
-echo "=== Starting DocMind AI Frontend (Streamlit on port $PORT) ==="
-exec streamlit run frontend/streamlit_app.py \
+PORT="${PORT:-10000}"
+echo "=== Starting DocMind AI Frontend (Streamlit on port $PORT) using $PY_BIN ==="
+exec $PY_BIN -m streamlit run frontend/streamlit_app.py \
     --server.port=$PORT \
     --server.address=0.0.0.0 \
     --server.headless=true \

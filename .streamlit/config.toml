@@ -1,8 +1,10 @@
 [server]
-port = 7860
+headless = true
+address = "0.0.0.0"
 enableCORS = false
 enableXsrfProtection = false
 maxUploadSize = 25
+maxMessageSize = 50
 
 [browser]
 gatherUsageStats = false
