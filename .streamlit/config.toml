@@ -4,7 +4,9 @@ address = "0.0.0.0"
 enableCORS = false
 enableXsrfProtection = false
 maxUploadSize = 25
-maxMessageSize = 50
+maxMessageSize = 80
+maxWidgetStateSize = 80
 
 [browser]
 gatherUsageStats = false
+

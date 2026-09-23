@@ -581,6 +581,7 @@ function updateSendState() {
 chatInput.addEventListener("input", updateSendState);
 
 function submitAction(overrideText) {
+    if (chatInput.disabled) return;
     const textQuery = (overrideText !== undefined ? overrideText : chatInput.value).trim();
     if (!textQuery && !attachedFile) return;
 
@@ -588,8 +589,9 @@ function submitAction(overrideText) {
         const fileToSend = attachedFile;
         sendBtn.disabled = true;
         chatInput.disabled = true;
-        const prevPlaceholder = chatInput.placeholder;
-        chatInput.placeholder = "Uploading & researching " + fileToSend.name + "...";
+        chatInput.value = "";
+        attachmentChip.style.display = "none";
+        chatInput.placeholder = "⏳ Uploading & researching " + fileToSend.name + "...";
 
         const reader = new FileReader();
         reader.onload = function(evt) {
@@ -601,15 +603,15 @@ function submitAction(overrideText) {
                 content: textQuery,
                 msg_id: Date.now() + "_" + Math.random().toString(36).substr(2, 6)
             });
-            clearAttachment();
-            chatInput.value = "";
-            chatInput.disabled = false;
-            updateSendState();
+            attachedFile = null;
+            hiddenFileInput.value = "";
         };
         reader.onerror = function() {
             sendBtn.disabled = false;
             chatInput.disabled = false;
-            chatInput.placeholder = prevPlaceholder;
+            attachmentChip.style.display = "inline-flex";
+            updatePlaceholder();
+            updateSendState();
             alert("Error reading file. Please try again.");
         };
         reader.readAsDataURL(fileToSend);
@@ -628,6 +630,7 @@ sendBtn.addEventListener("click", () => submitAction());
 chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
         e.preventDefault();
+        if (chatInput.disabled) return;
         submitAction();
     }
 });

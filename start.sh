@@ -37,4 +37,6 @@ exec $PY_BIN -m streamlit run frontend/streamlit_app.py \
     --server.enableCORS=false \
     --server.enableXsrfProtection=false \
     --server.maxUploadSize=25 \
-    --server.maxMessageSize=50
+    --server.maxMessageSize=80 \
+    --server.maxWidgetStateSize=80
+
