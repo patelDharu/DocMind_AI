@@ -614,7 +614,7 @@ def ensure_uploaded_to_backend(uploaded_file, cache_prefix: str = "tab") -> str 
 
     try:
         files = {"file": (uploaded_file.name, file_bytes)}
-        res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=120)
+        res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
         if res.ok:
             data = res.json()
             doc_id = data["document_id"]
@@ -1164,7 +1164,7 @@ with tab_chat:
                     with st.spinner(f"Indexing {fname} & checking actions/deadlines with Gemini..."):
                         try:
                             files = {"file": (fname, file_bytes)}
-                            res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=120)
+                            res = requests.post(f"{API_URL}/upload", files=files, headers=get_api_headers(), timeout=300)
                             if res.ok:
                                 data = res.json()
                                 new_doc_id = data["document_id"]
@@ -1581,7 +1581,7 @@ with tab_summarize:
                         "summary_type": sum_type,
                         "language": sum_lang,
                     }
-                    res = requests.post(f"{API_URL}/summarize", json=payload, headers=get_api_headers(), timeout=120)
+                    res = requests.post(f"{API_URL}/summarize", json=payload, headers=get_api_headers(), timeout=240)
                     if res.ok:
                         data = res.json()
                         st.success(f"Summary for: **{data['filename']}**")
@@ -1692,7 +1692,7 @@ with tab_compare:
                         "focus_aspects": focus,
                         "language": comp_lang,
                     }
-                    res = requests.post(f"{API_URL}/compare", json=payload, headers=get_api_headers(), timeout=180)
+                    res = requests.post(f"{API_URL}/compare", json=payload, headers=get_api_headers(), timeout=300)
                     if res.ok:
                         data = res.json()
                         st.markdown(data.get("comparison", ""))
@@ -1773,7 +1773,7 @@ with tab_extract:
                         "document_id": target_doc_id,
                         "extraction_type": ext_type,
                     }
-                    res = requests.post(f"{API_URL}/extract", json=payload, headers=get_api_headers(), timeout=120)
+                    res = requests.post(f"{API_URL}/extract", json=payload, headers=get_api_headers(), timeout=240)
                 except Exception as conn_err:
                     st.error(f"Connection error: {conn_err}")
                     res = None

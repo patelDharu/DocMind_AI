@@ -115,13 +115,13 @@ class VectorStore:
         self._rebuild_bm25()
 
         # 2. Vector indexing with smart chunk budgeting:
-        # 50 chunks gives excellent semantic coverage while running in <3 seconds on 512 MB RAM
-        MAX_VECTOR_CHUNKS = 50
+        # 30 chunks matches embed_passages batch_size perfectly (1 single API call in ~2s)
+        MAX_VECTOR_CHUNKS = 30
         if len(chunks) > MAX_VECTOR_CHUNKS:
-            primary_chunks = chunks[:35]
-            remaining_chunks = chunks[35:]
-            step = max(1, len(remaining_chunks) // 15)
-            sampled_remaining = remaining_chunks[::step][:15]
+            primary_chunks = chunks[:22]
+            remaining_chunks = chunks[22:]
+            step = max(1, len(remaining_chunks) // 8)
+            sampled_remaining = remaining_chunks[::step][:8]
             vector_chunks = primary_chunks + sampled_remaining
         else:
             vector_chunks = chunks

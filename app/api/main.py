@@ -354,12 +354,12 @@ def upload_document(
 
         pipeline.ingest(chunks, user_email=user_email)
 
-        # Proactively scan for actions, deadlines & consequences
+        # Proactively scan for actions, deadlines & consequences (budgeted to first 8,000 chars for rapid response)
         action_alert = {"requires_action": False, "urgency": "none"}
         try:
             doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
             action_alert = intelligence.analyze_action_and_deadlines(
-                document_text=doc_text,
+                document_text=doc_text[:8000],
                 filename=original_filename,
                 language="en",
             )
