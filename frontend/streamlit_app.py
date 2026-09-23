@@ -1214,74 +1214,58 @@ with tab_chat:
 
                                 alert_block = format_action_alert_markdown(action_alert)
 
-                                if prompt:
-                                    st.session_state.messages.append({
-                                        "role": "user",
-                                        "content": f"📄 **[{fname}]**\n\n{prompt}",
-                                    })
-                                    with st.spinner("Analyzing attached document with Master Model..."):
-                                        try:
-                                            history_payload = [
-                                                {"role": m["role"], "content": m["content"]}
-                                                for m in st.session_state.messages[:-1]
-                                            ]
-                                            payload = {
-                                                "question": prompt,
-                                                "document_ids": [new_doc_id],
-                                                "history": history_payload,
-                                                "top_k": 8,
-                                            }
-                                            ask_res = requests.post(f"{API_URL}/ask", json=payload, headers=get_api_headers(), timeout=120)
-                                            if ask_res.ok:
-                                                result = ask_res.json()
-                                                answer_text = result.get("answer", "No answer returned.")
-                                                full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
-                                                st.session_state.messages.append({
-                                                    "role": "assistant",
-                                                    "content": full_reply,
-                                                    "confidence": result.get("confidence", "high"),
-                                                    "sources": result.get("sources", []),
-                                                    "rewritten_query": result.get("rewritten_query"),
-                                                    "detected_language": result.get("detected_language", "en"),
-                                                    "action_alert": action_alert,
-                                                    "doc_id": new_doc_id,
-                                                })
-                                            else:
-                                                st.session_state.messages.append({
-                                                    "role": "assistant",
-                                                    "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
-                                                    "confidence": "low",
-                                                    "sources": [],
-                                                    "action_alert": action_alert,
-                                                    "doc_id": new_doc_id,
-                                                })
-                                        except Exception as ask_err:
+                                query_text = prompt if prompt else "Please provide a comprehensive summary, key findings, and important takeaways from this document."
+                                user_display = f"📄 **[{fname}]**\n\n{prompt}" if prompt else f"📄 **[{fname}]**\n\n*Provide document summary and key highlights.*"
+
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": user_display,
+                                })
+                                with st.spinner(f"Researching & analyzing '{fname}' with Gemini AI..."):
+                                    try:
+                                        history_payload = [
+                                            {"role": m["role"], "content": m["content"]}
+                                            for m in st.session_state.messages[:-1]
+                                        ]
+                                        payload = {
+                                            "question": query_text,
+                                            "document_ids": [new_doc_id],
+                                            "history": history_payload,
+                                            "top_k": 8,
+                                        }
+                                        ask_res = requests.post(f"{API_URL}/ask", json=payload, headers=get_api_headers(), timeout=180)
+                                        if ask_res.ok:
+                                            result = ask_res.json()
+                                            answer_text = result.get("answer", "No answer returned.")
+                                            full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
                                             st.session_state.messages.append({
                                                 "role": "assistant",
-                                                "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
+                                                "content": full_reply,
+                                                "confidence": result.get("confidence", "high"),
+                                                "sources": result.get("sources", []),
+                                                "rewritten_query": result.get("rewritten_query"),
+                                                "detected_language": result.get("detected_language", "en"),
+                                                "action_alert": action_alert,
+                                                "doc_id": new_doc_id,
+                                            })
+                                        else:
+                                            st.session_state.messages.append({
+                                                "role": "assistant",
+                                                "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
                                                 "confidence": "low",
                                                 "sources": [],
                                                 "action_alert": action_alert,
                                                 "doc_id": new_doc_id,
                                             })
-                                else:
-                                    st.session_state.messages.append({
-                                        "role": "user",
-                                        "content": f"📎 Attached document: **{fname}**",
-                                    })
-                                    welcome_parts = [f"📄 **{fname}** is ready."]
-                                    if alert_block:
-                                        welcome_parts.append(alert_block)
-                                    welcome_parts.append("---\n*Ask any question about this document below, or choose an option from the tabs above.*")
-                                    welcome_msg = "\n\n".join(welcome_parts)
-                                    st.session_state.messages.append({
-                                        "role": "assistant",
-                                        "content": welcome_msg,
-                                        "confidence": "high",
-                                        "sources": [],
-                                        "action_alert": action_alert,
-                                        "doc_id": new_doc_id,
-                                    })
+                                    except Exception as ask_err:
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
+                                            "confidence": "low",
+                                            "sources": [],
+                                            "action_alert": action_alert,
+                                            "doc_id": new_doc_id,
+                                        })
 
                                 save_current_chat_session()
                                 st.rerun()

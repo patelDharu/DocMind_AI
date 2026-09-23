@@ -543,9 +543,9 @@ menuUploadFile.addEventListener("click", () => {
 hiddenFileInput.addEventListener("change", () => {
     if (hiddenFileInput.files && hiddenFileInput.files.length > 0) {
         const file = hiddenFileInput.files[0];
-        const maxWsBytes = 4 * 1024 * 1024; // 4 MB safety limit for iframe base64 postMessage
-        if (file.size > maxWsBytes) {
-            alert("⚠️ File \"" + file.name + "\" is " + formatBytes(file.size) + ".\n\nTo prevent browser timeout or disconnection on cloud servers, files larger than 4 MB (up to 25 MB) should be uploaded using the '📎 Direct Document Uploader (up to 25 MB)' above.\n\nPlease upload this document there!");
+        const maxBytes = 25 * 1024 * 1024; // 25 MB limit
+        if (file.size > maxBytes) {
+            alert("⚠️ File \"" + file.name + "\" is " + formatBytes(file.size) + ". The maximum allowed file size is 25 MB. Please select a file up to 25 MB.");
             clearAttachment();
             return;
         }
@@ -553,7 +553,7 @@ hiddenFileInput.addEventListener("change", () => {
         chipFilename.textContent = attachedFile.name;
         chipFilesize.textContent = formatBytes(attachedFile.size);
         attachmentChip.style.display = "inline-flex";
-        chatInput.placeholder = "Ask about " + attachedFile.name + " (or click send to index)...";
+        chatInput.placeholder = "Ask any question about " + attachedFile.name + " (or press Enter to research)...";
         updateSendState();
         chatInput.focus();
     }
@@ -587,6 +587,10 @@ function submitAction(overrideText) {
     if (attachedFile) {
         const fileToSend = attachedFile;
         sendBtn.disabled = true;
+        chatInput.disabled = true;
+        const prevPlaceholder = chatInput.placeholder;
+        chatInput.placeholder = "Uploading & researching " + fileToSend.name + "...";
+
         const reader = new FileReader();
         reader.onload = function(evt) {
             const b64Data = evt.target.result.split(',')[1];
@@ -599,11 +603,14 @@ function submitAction(overrideText) {
             });
             clearAttachment();
             chatInput.value = "";
+            chatInput.disabled = false;
             updateSendState();
         };
         reader.onerror = function() {
             sendBtn.disabled = false;
-            console.error("Failed to read file.");
+            chatInput.disabled = false;
+            chatInput.placeholder = prevPlaceholder;
+            alert("Error reading file. Please try again.");
         };
         reader.readAsDataURL(fileToSend);
     } else {
