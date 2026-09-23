@@ -384,6 +384,24 @@ html, body {
                     <span class="menu-desc">Upload from computer</span>
                 </div>
             </div>
+
+            <!-- Connect to Google Drive Option -->
+            <div class="menu-item" id="menuGoogleDrive">
+                <div class="menu-icon" style="background: #f0fdf4; border-color: #bbf7d0;">
+                    <svg width="20" height="20" viewBox="0 0 87.3 78" fill="none">
+                        <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                        <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+                        <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+                        <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                        <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+                        <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+                    </svg>
+                </div>
+                <div class="menu-text-group">
+                    <span class="menu-title">Connect to Google Drive</span>
+                    <span class="menu-desc">Import shared link, Docs, or Sheets</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -508,13 +526,16 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+const menuGoogleDrive = document.getElementById("menuGoogleDrive");
+let attachedDriveUrl = null;
+
 // Plus Button Toggle
 plusBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     const isOpen = menuWrapper.classList.toggle("open");
     plusBtn.classList.toggle("active", isOpen);
     if (isOpen) {
-        setFrameHeight(145); // Expand frame to show popup menu cleanly
+        setFrameHeight(195); // Expand frame to show both popup menu options cleanly
     } else {
         setFrameHeight(68);
     }
@@ -539,6 +560,46 @@ menuUploadFile.addEventListener("click", () => {
     hiddenFileInput.click();
 });
 
+// Menu item: Connect to Google Drive (Import from shared link)
+menuGoogleDrive.addEventListener("click", () => {
+    menuWrapper.classList.remove("open");
+    plusBtn.classList.remove("active");
+    setFrameHeight(68);
+    const link = prompt(
+        "Paste your Google Drive, Google Docs, or Google Sheets link:\n\n" +
+        "(e.g., https://drive.google.com/file/d/... or https://docs.google.com/document/d/...)\n\n" +
+        "Ensure link sharing is set to 'Anyone with the link can view'."
+    );
+    if (link && link.trim()) {
+        attachGoogleDriveUrl(link.trim());
+    }
+});
+
+function attachGoogleDriveUrl(rawUrl) {
+    const url = rawUrl.trim();
+    if (!/(?:drive|docs)\.google\.com/i.test(url)) {
+        alert("⚠️ Please provide a valid link from drive.google.com or docs.google.com");
+        return;
+    }
+    clearAttachment();
+    attachedDriveUrl = url;
+    chipFilename.textContent = "Google Drive Document";
+    chipFilesize.textContent = "Cloud Link";
+    attachmentChip.style.display = "inline-flex";
+    chatInput.placeholder = "Ask any question about this Google Drive document (or press Enter to research)...";
+    updateSendState();
+    chatInput.focus();
+}
+
+// Automatically detect pasted Google Drive links directly in searchbar
+chatInput.addEventListener("paste", (e) => {
+    const pasted = (e.clipboardData || window.clipboardData).getData("text");
+    if (pasted && /https?:\/\/(?:drive|docs)\.google\.com\//i.test(pasted.trim())) {
+        e.preventDefault();
+        attachGoogleDriveUrl(pasted.trim());
+    }
+});
+
 // Handle File Selection
 hiddenFileInput.addEventListener("change", () => {
     if (hiddenFileInput.files && hiddenFileInput.files.length > 0) {
@@ -549,6 +610,7 @@ hiddenFileInput.addEventListener("change", () => {
             clearAttachment();
             return;
         }
+        clearAttachment();
         attachedFile = file;
         chipFilename.textContent = attachedFile.name;
         chipFilesize.textContent = formatBytes(attachedFile.size);
@@ -559,13 +621,14 @@ hiddenFileInput.addEventListener("change", () => {
     }
 });
 
-// Remove Attached File
+// Remove Attached File or Link
 chipRemoveBtn.addEventListener("click", () => {
     clearAttachment();
 });
 
 function clearAttachment() {
     attachedFile = null;
+    attachedDriveUrl = null;
     hiddenFileInput.value = "";
     attachmentChip.style.display = "none";
     updatePlaceholder();
@@ -574,7 +637,7 @@ function clearAttachment() {
 
 function updateSendState() {
     const hasText = chatInput.value.trim().length > 0;
-    const hasFile = attachedFile !== null;
+    const hasFile = attachedFile !== null || attachedDriveUrl !== null;
     sendBtn.disabled = !(hasText || hasFile);
 }
 
@@ -583,7 +646,25 @@ chatInput.addEventListener("input", updateSendState);
 function submitAction(overrideText) {
     if (chatInput.disabled) return;
     const textQuery = (overrideText !== undefined ? overrideText : chatInput.value).trim();
-    if (!textQuery && !attachedFile) return;
+    if (!textQuery && !attachedFile && !attachedDriveUrl) return;
+
+    if (attachedDriveUrl) {
+        const driveUrlToSend = attachedDriveUrl;
+        sendBtn.disabled = true;
+        chatInput.disabled = true;
+        chatInput.value = "";
+        attachmentChip.style.display = "none";
+        chatInput.placeholder = "⏳ Downloading from Google Drive & researching with Gemini AI...";
+
+        sendToStreamlit({
+            type: "drive_and_prompt",
+            drive_url: driveUrlToSend,
+            content: textQuery,
+            msg_id: Date.now() + "_" + Math.random().toString(36).substr(2, 6)
+        });
+        attachedDriveUrl = null;
+        return;
+    }
 
     if (attachedFile) {
         const fileToSend = attachedFile;

@@ -32,6 +32,7 @@ from app.core.doc_editor import DocumentEditor
 from app.core.speech import transcribe_audio
 from app.core.tts import synthesize_speech
 from app.core.resilience import GeminiServiceError
+from app.core.gdrive import download_google_drive_file
 from app.core.auth import (
     authenticate_user,
     register_user,
@@ -142,6 +143,10 @@ for _d in [UPLOAD_DIR, TEMP_AUDIO_DIR, AUDIO_OUT_DIR, GENERATED_DIR]:
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class DriveImportRequest(BaseModel):
+    url: str
 
 
 class RegisterRequest(BaseModel):
@@ -388,6 +393,114 @@ def upload_document(
         "document_id": document_id,
         "chunks_indexed": len(chunks),
         "action_alert": action_alert,
+    }
+
+
+# =========================================================
+# 1.1 UPLOAD & INDEX FROM GOOGLE DRIVE (User Scoped)
+# =========================================================
+
+@app.post("/upload/drive")
+def upload_from_google_drive(
+    req: DriveImportRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    drive_url = (req.url or "").strip()
+    if not drive_url:
+        raise HTTPException(status_code=400, detail="Google Drive URL is required.")
+
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not gemini_key:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not set on this server. Please add your GEMINI_API_KEY under the 'Environment' tab in Render Dashboard.",
+        )
+
+    try:
+        dest_path, original_filename = download_google_drive_file(drive_url, UPLOAD_DIR)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download from Google Drive: {e}")
+
+    document_id = uuid.uuid4().hex
+
+    try:
+        gc.collect()
+        records = load_document(str(dest_path))
+        if not records:
+            records = [{
+                "text": f"Google Drive Document: {original_filename}\n[Content processed]",
+                "metadata": {
+                    "source": original_filename,
+                    "page": 1,
+                    "char_count": len(original_filename),
+                    "user_email": user_email,
+                    "drive_url": drive_url,
+                }
+            }]
+
+        for record in records:
+            metadata = record.get("metadata", {})
+            metadata["document_id"] = document_id
+            metadata["source"] = original_filename
+            metadata["user_email"] = user_email
+            metadata["drive_url"] = drive_url
+            record["metadata"] = metadata
+
+        chunks = chunk_text(records)
+        if not chunks:
+            chunks = [{
+                "id": f"{document_id}_chunk_0",
+                "text": f"Document: {original_filename}",
+                "metadata": {
+                    "document_id": document_id,
+                    "source": original_filename,
+                    "page": 1,
+                    "chunk": 0,
+                    "user_email": user_email,
+                    "drive_url": drive_url,
+                }
+            }]
+        else:
+            for c in chunks:
+                c_meta = c.get("metadata", {})
+                c_meta["user_email"] = user_email
+                c_meta["drive_url"] = drive_url
+                c["metadata"] = c_meta
+
+        pipeline.ingest(chunks, user_email=user_email)
+
+        action_alert = {"requires_action": False, "urgency": "none"}
+        try:
+            doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
+            action_alert = intelligence.analyze_action_and_deadlines(
+                document_text=doc_text[:8000],
+                filename=original_filename,
+                language="en",
+            )
+        except Exception as alert_err:
+            logger.warning(f"Action alert skipped for Google Drive doc {original_filename}: {alert_err}")
+
+        gc.collect()
+    except Exception as e:
+        if dest_path.exists():
+            try:
+                dest_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "status": "success",
+        "filename": original_filename,
+        "document_id": document_id,
+        "chunks_indexed": len(chunks),
+        "action_alert": action_alert,
+        "source": "google_drive",
+        "drive_url": drive_url,
     }
 
 

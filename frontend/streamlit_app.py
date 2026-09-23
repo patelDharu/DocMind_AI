@@ -1248,6 +1248,94 @@ with tab_chat:
                         except Exception as e:
                             st.error(f"Upload error: {e}")
 
+        # 1.2 Google Drive Link Import with Optional Prompt
+        elif chat_val.get("type") == "drive_and_prompt":
+            drive_url = chat_val.get("drive_url", "").strip()
+            prompt = chat_val.get("content", "").strip()
+
+            if drive_url:
+                with st.spinner("Connecting to Google Drive, downloading & indexing document..."):
+                    try:
+                        payload = {"url": drive_url}
+                        res = requests.post(f"{API_URL}/upload/drive", json=payload, headers=get_api_headers(), timeout=300)
+                        if res.ok:
+                            data = res.json()
+                            new_doc_id = data["document_id"]
+                            fname = data.get("filename", "Google Drive Document")
+                            action_alert = data.get("action_alert", {})
+                            st.session_state.setdefault("doc_action_alerts", {})[new_doc_id] = action_alert
+                            st.session_state.active_doc_id = new_doc_id
+                            st.session_state.selected_document_ids = [new_doc_id]
+
+                            alert_block = format_action_alert_markdown(action_alert)
+
+                            query_text = prompt if prompt else "Please provide a comprehensive summary, key findings, and important takeaways from this document."
+                            user_display = f"📁 **[{fname}]** *(Google Drive)*\n\n{prompt}" if prompt else f"📁 **[{fname}]** *(Google Drive)*\n\n*Provide document summary and key highlights.*"
+
+                            st.session_state.messages.append({
+                                "role": "user",
+                                "content": user_display,
+                            })
+                            with st.spinner(f"Researching & analyzing '{fname}' with Gemini AI..."):
+                                try:
+                                    history_payload = [
+                                        {"role": m["role"], "content": m["content"]}
+                                        for m in st.session_state.messages[:-1]
+                                    ]
+                                    ask_payload = {
+                                        "question": query_text,
+                                        "document_ids": [new_doc_id],
+                                        "history": history_payload,
+                                        "top_k": 8,
+                                    }
+                                    ask_res = requests.post(f"{API_URL}/ask", json=ask_payload, headers=get_api_headers(), timeout=180)
+                                    if ask_res.ok:
+                                        result = ask_res.json()
+                                        answer_text = result.get("answer", "No answer returned.")
+                                        full_reply = f"{alert_block}\n\n---\n\n{answer_text}" if alert_block else answer_text
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": full_reply,
+                                            "confidence": result.get("confidence", "high"),
+                                            "sources": result.get("sources", []),
+                                            "rewritten_query": result.get("rewritten_query"),
+                                            "detected_language": result.get("detected_language", "en"),
+                                            "action_alert": action_alert,
+                                            "doc_id": new_doc_id,
+                                        })
+                                    else:
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": f"{alert_block}\n\n⚠️ Could not generate answer ({ask_res.status_code}): {ask_res.text}",
+                                            "confidence": "low",
+                                            "sources": [],
+                                            "action_alert": action_alert,
+                                            "doc_id": new_doc_id,
+                                        })
+                                except Exception as ask_err:
+                                    st.session_state.messages.append({
+                                        "role": "assistant",
+                                        "content": f"{alert_block}\n\n⚠️ Connection error while answering: {ask_err}",
+                                        "confidence": "low",
+                                        "sources": [],
+                                        "action_alert": action_alert,
+                                        "doc_id": new_doc_id,
+                                    })
+
+                            save_current_chat_session()
+                            st.rerun()
+                        else:
+                            err_msg = res.text
+                            try:
+                                err_msg = res.json().get("detail", res.text)
+                            except Exception:
+                                pass
+                            st.error(f"⚠️ Google Drive import failed: {err_msg}")
+                    except requests.exceptions.Timeout:
+                        st.error("⚠️ Connection to Google Drive timed out. Please check that link sharing is enabled and try again.")
+                    except Exception as e:
+                        st.error(f"⚠️ Error importing from Google Drive: {e}")
+
         # 2. Text Query (Typed or Web Speech Recognition Transcribed)
         elif chat_val.get("type") == "text":
             prompt = chat_val.get("content", "").strip()
