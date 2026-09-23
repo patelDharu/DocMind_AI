@@ -1066,46 +1066,7 @@ tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
 # =========================================================
 
 with tab_chat:
-    # -------------------------------------------------------------
-    # Direct Document Ingestion Drawer (Up to 25 MB HTTP Stream)
-    # -------------------------------------------------------------
-    with st.expander("📎 Direct Document Uploader (Up to 25 MB — PDF, Word, Excel, CSV, TXT, Images)", expanded=False):
-        c_up1, c_up2 = st.columns([3, 1])
-        with c_up1:
-            chat_upload = st.file_uploader(
-                "Choose a document to index",
-                type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "htm", "json", "png", "jpg", "jpeg", "webp"],
-                key="chat_tab_direct_doc_uploader",
-                label_visibility="collapsed",
-                help="Upload files up to 25 MB safely using streaming HTTP upload.",
-            )
-        with c_up2:
-            st.caption("⚡ **Fast HTTP Stream**\nSafe for large 25MB files. Automatically indexes and targets document.")
 
-        if chat_upload:
-            with st.spinner(f"Indexing '{chat_upload.name}' with Gemini AI..."):
-                d_id = ensure_uploaded_to_backend(chat_upload, cache_prefix="chat_tab_direct")
-                if d_id:
-                    if d_id not in st.session_state.selected_document_ids:
-                        st.session_state.selected_document_ids = [d_id]
-                        st.session_state.active_doc_id = d_id
-                        st.success(f"✅ '{chat_upload.name}' indexed successfully!")
-                        act_alert = st.session_state.get("doc_action_alerts", {}).get(d_id, {})
-                        alert_md = format_action_alert_markdown(act_alert)
-                        welcome_txt = f"📄 **{chat_upload.name}** has been indexed and is ready for queries."
-                        if alert_md:
-                            welcome_txt += f"\n\n{alert_md}"
-                        welcome_txt += "\n\n---\n*Ask any question below about this document in English, हिन्दी, or ગુજરાતી.*"
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": welcome_txt,
-                            "confidence": "high",
-                            "sources": [],
-                            "action_alert": act_alert,
-                            "doc_id": d_id,
-                        })
-                        save_current_chat_session()
-                        st.rerun()
 
     # Only show active document banner when conversation has messages and document(s) are actively targeted
     if st.session_state.messages and st.session_state.selected_document_ids:
