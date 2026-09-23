@@ -61,11 +61,28 @@ class DocumentLoader:
             docs = DocumentLoader._ocr_with_gemini(file_path)
 
         # Sanitize text across all records to strip XML-incompatible control characters
+        # and enforce sensible memory cap for 25MB documents (max 350,000 characters to protect 512MB RAM)
+        import gc
+        MAX_TOTAL_CHARS = 350_000
+        total_chars = 0
+        capped_docs = []
         for doc in docs:
             if "text" in doc and isinstance(doc["text"], str):
-                doc["text"] = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f]", "", doc["text"])
+                cleaned_text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f]", "", doc["text"])
+                if total_chars + len(cleaned_text) > MAX_TOTAL_CHARS:
+                    allowed = max(0, MAX_TOTAL_CHARS - total_chars)
+                    if allowed > 100:
+                        doc["text"] = cleaned_text[:allowed] + "\n\n[Content truncated for memory safety]"
+                        capped_docs.append(doc)
+                    break
+                doc["text"] = cleaned_text
+                total_chars += len(cleaned_text)
+                capped_docs.append(doc)
+            else:
+                capped_docs.append(doc)
 
-        return docs
+        gc.collect()
+        return capped_docs
 
     @staticmethod
     def _format_table_as_markdown(table: List[List[Any]]) -> str:

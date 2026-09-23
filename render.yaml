@@ -14,3 +14,5 @@ services:
         value: gemini-embedding-001
       - key: PORT
         value: 7860
+      - key: DATABASE_URL
+        sync: false

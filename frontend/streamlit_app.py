@@ -30,6 +30,7 @@ from app.core.auth import (
     clear_all_user_chat_sessions,
     get_or_create_demo_token,
     sanitize_chat_messages,
+    get_database_status_info,
 )
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -863,6 +864,28 @@ st.sidebar.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+db_info = get_database_status_info()
+if db_info.get("persistent"):
+    st.sidebar.markdown("""
+    <div style="font-size: 11px; color: #15803d; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 6px 10px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 13px;">🟢</span>
+        <div>
+            <strong>Database:</strong> PostgreSQL (Cloud Persistent)<br/>
+            <span style="font-size: 10px; color: #166534;">Accounts & chats saved permanently.</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.sidebar.markdown("""
+    <div style="font-size: 11px; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 6px 10px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 13px;">🟡</span>
+        <div>
+            <strong>Database:</strong> Local SQLite<br/>
+            <span style="font-size: 10px; color: #92400e;">Render free tier resets local storage on sleep. Connect PostgreSQL to persist.</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 c_nav1, c_nav2 = st.sidebar.columns([1.4, 1])
 with c_nav1:
     if st.button("➕ New Chat", key="top_new_chat_btn", use_container_width=True, type="primary"):
@@ -1010,6 +1033,20 @@ if not check_backend_alive():
         "- If you deployed FastAPI as a separate Web Service, set the `API_URL` environment variable to your FastAPI backend URL."
     )
 
+has_gemini_api_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
+if not has_gemini_api_key:
+    st.error(
+        "⚠️ **Google Gemini API Key is missing on this server!**\n\n"
+        "AI indexing, embeddings, and chat answers will not function until `GEMINI_API_KEY` is configured.\n\n"
+        "**How to fix on Render**:\n"
+        "1. Open your **[Render Dashboard](https://dashboard.render.com/)**.\n"
+        "2. Click your DocMind AI Web Service → go to the **Environment** tab.\n"
+        "3. Click **Add Environment Variable**:\n"
+        "   - **Key**: `GEMINI_API_KEY`\n"
+        "   - **Value**: your Google Gemini API key from [Google AI Studio](https://aistudio.google.com/)\n"
+        "4. Click **Save Changes** and allow Render to redeploy."
+    )
+
 
 # =========================================================
 # MAIN CONTENT TABS
@@ -1029,6 +1066,47 @@ tab_chat, tab_studio, tab_summarize, tab_compare, tab_extract = st.tabs([
 # =========================================================
 
 with tab_chat:
+    # -------------------------------------------------------------
+    # Direct Document Ingestion Drawer (Up to 25 MB HTTP Stream)
+    # -------------------------------------------------------------
+    with st.expander("📎 Direct Document Uploader (Up to 25 MB — PDF, Word, Excel, CSV, TXT, Images)", expanded=False):
+        c_up1, c_up2 = st.columns([3, 1])
+        with c_up1:
+            chat_upload = st.file_uploader(
+                "Choose a document to index",
+                type=["pdf", "docx", "doc", "txt", "md", "csv", "tsv", "xlsx", "xls", "pptx", "html", "htm", "json", "png", "jpg", "jpeg", "webp"],
+                key="chat_tab_direct_doc_uploader",
+                label_visibility="collapsed",
+                help="Upload files up to 25 MB safely using streaming HTTP upload.",
+            )
+        with c_up2:
+            st.caption("⚡ **Fast HTTP Stream**\nSafe for large 25MB files. Automatically indexes and targets document.")
+
+        if chat_upload:
+            with st.spinner(f"Indexing '{chat_upload.name}' with Gemini AI..."):
+                d_id = ensure_uploaded_to_backend(chat_upload, cache_prefix="chat_tab_direct")
+                if d_id:
+                    if d_id not in st.session_state.selected_document_ids:
+                        st.session_state.selected_document_ids = [d_id]
+                        st.session_state.active_doc_id = d_id
+                        st.success(f"✅ '{chat_upload.name}' indexed successfully!")
+                        act_alert = st.session_state.get("doc_action_alerts", {}).get(d_id, {})
+                        alert_md = format_action_alert_markdown(act_alert)
+                        welcome_txt = f"📄 **{chat_upload.name}** has been indexed and is ready for queries."
+                        if alert_md:
+                            welcome_txt += f"\n\n{alert_md}"
+                        welcome_txt += "\n\n---\n*Ask any question below about this document in English, हिन्दी, or ગુજરાતી.*"
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": welcome_txt,
+                            "confidence": "high",
+                            "sources": [],
+                            "action_alert": act_alert,
+                            "doc_id": d_id,
+                        })
+                        save_current_chat_session()
+                        st.rerun()
+
     # Only show active document banner when conversation has messages and document(s) are actively targeted
     if st.session_state.messages and st.session_state.selected_document_ids:
         if len(st.session_state.selected_document_ids) == 1:

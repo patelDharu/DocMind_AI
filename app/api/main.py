@@ -38,6 +38,7 @@ from app.core.auth import (
     validate_session_token,
     generate_session_token,
     get_or_create_demo_token,
+    get_database_status_info,
 )
 
 # =========================================================
@@ -208,6 +209,8 @@ def health():
         "status": "healthy",
         "service": "DocMind AI",
         "version": "2.1.0",
+        "database": get_database_status_info(),
+        "has_gemini_key": bool(os.getenv("GEMINI_API_KEY", "").strip()),
     }
 
 

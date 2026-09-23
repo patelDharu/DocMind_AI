@@ -88,10 +88,17 @@ class VectorStore:
         if not chunks:
             return
 
+        import gc
         clean_email = user_email.strip().lower() if user_email else "demo@docmind.ai"
 
-        # 1. BM25 indexing: index 100% of all chunks with user isolation!
-        for chunk in chunks:
+        # 1. BM25 indexing: budget up to 400 chunks per document to stay strictly within 512 MB RAM
+        MAX_BM25_PER_DOC = 400
+        bm25_candidate_chunks = chunks
+        if len(chunks) > MAX_BM25_PER_DOC:
+            step = max(1, len(chunks) // MAX_BM25_PER_DOC)
+            bm25_candidate_chunks = chunks[::step][:MAX_BM25_PER_DOC]
+
+        for chunk in bm25_candidate_chunks:
             meta = chunk.get("metadata", {})
             doc_id = str(meta.get("document_id", meta.get("source", "unknown")))
             meta["user_email"] = clean_email
@@ -108,12 +115,13 @@ class VectorStore:
         self._rebuild_bm25()
 
         # 2. Vector indexing with smart chunk budgeting:
-        MAX_VECTOR_CHUNKS = 120
+        # 50 chunks gives excellent semantic coverage while running in <3 seconds on 512 MB RAM
+        MAX_VECTOR_CHUNKS = 50
         if len(chunks) > MAX_VECTOR_CHUNKS:
-            primary_chunks = chunks[:80]
-            remaining_chunks = chunks[80:]
-            step = max(1, len(remaining_chunks) // 40)
-            sampled_remaining = remaining_chunks[::step][:40]
+            primary_chunks = chunks[:35]
+            remaining_chunks = chunks[35:]
+            step = max(1, len(remaining_chunks) // 15)
+            sampled_remaining = remaining_chunks[::step][:15]
             vector_chunks = primary_chunks + sampled_remaining
         else:
             vector_chunks = chunks
@@ -147,6 +155,7 @@ class VectorStore:
 
         if not ids or not embeddings:
             logger.warning("No embeddings to add to ChromaDB. Chunks remain fully indexed in BM25.")
+            gc.collect()
             return
 
         try:
@@ -172,6 +181,9 @@ class VectorStore:
                 )
             else:
                 raise e
+        finally:
+            del embeddings, texts, ids, metadatas
+            gc.collect()
 
     # =========================================================
     # ADVANCED HYBRID SEARCH (Semantic AI + RRF + User Isolation)

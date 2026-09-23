@@ -543,9 +543,9 @@ menuUploadFile.addEventListener("click", () => {
 hiddenFileInput.addEventListener("change", () => {
     if (hiddenFileInput.files && hiddenFileInput.files.length > 0) {
         const file = hiddenFileInput.files[0];
-        const maxBytes = 25 * 1024 * 1024; // 25 MB limit
-        if (file.size > maxBytes) {
-            alert("⚠️ File \"" + file.name + "\" is " + formatBytes(file.size) + ". The maximum allowed file size is 25 MB. Please select a smaller file.");
+        const maxWsBytes = 4 * 1024 * 1024; // 4 MB safety limit for iframe base64 postMessage
+        if (file.size > maxWsBytes) {
+            alert("⚠️ File \"" + file.name + "\" is " + formatBytes(file.size) + ".\n\nTo prevent browser timeout or disconnection on cloud servers, files larger than 4 MB (up to 25 MB) should be uploaded using the '📎 Direct Document Uploader (up to 25 MB)' above.\n\nPlease upload this document there!");
             clearAttachment();
             return;
         }

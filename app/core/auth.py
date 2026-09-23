@@ -3,32 +3,177 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
+
+logger = logging.getLogger("docmind.auth")
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "users.db"
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """Returns a connection to the SQLite users database with row_factory enabled."""
+def get_database_url() -> Optional[str]:
+    """Returns normalized DATABASE_URL if set (converts postgres:// to postgresql://)."""
+    raw_url = (os.getenv("DATABASE_URL") or "").strip()
+    if not raw_url:
+        return None
+    # Fix Render/Heroku legacy postgres:// schema for psycopg2
+    if raw_url.startswith("postgres://"):
+        raw_url = "postgresql://" + raw_url[len("postgres://"):]
+    return raw_url
+
+
+def is_postgres() -> bool:
+    """Returns True if a PostgreSQL connection string is configured."""
+    return bool(get_database_url())
+
+
+def get_database_status_info() -> Dict[str, Any]:
+    """Returns current active database type and connection info for diagnostics."""
+    if is_postgres():
+        url = get_database_url() or ""
+        host = url.split("@")[-1].split("/")[0] if "@" in url else "remote"
+        return {
+            "type": "postgresql",
+            "label": "PostgreSQL (Persistent Cloud)",
+            "host": host,
+            "persistent": True,
+        }
+    return {
+        "type": "sqlite",
+        "label": "Local SQLite (Ephemeral on Render)",
+        "path": str(DB_PATH),
+        "persistent": False,
+    }
+
+
+def get_raw_connection():
+    """Returns a raw database connection (psycopg2 for PostgreSQL, sqlite3 for local)."""
+    db_url = get_database_url()
+    if db_url:
+        try:
+            import psycopg2
+            return psycopg2.connect(db_url)
+        except Exception as e:
+            logger.error(f"Failed to connect to PostgreSQL via DATABASE_URL ({e}). Falling back to SQLite...")
+    
+    # SQLite fallback
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_user_db():
-    """Initializes users and chat_sessions tables if not exists and seeds the default demo account."""
-    conn = get_db_connection()
+def execute_db(
+    query: str,
+    params: tuple = (),
+    fetchone: bool = False,
+    fetchall: bool = False,
+    commit: bool = False,
+) -> Any:
+    """
+    Executes a SQL query universally across both SQLite and PostgreSQL.
+    Automatically handles parameter placeholders (? -> %s for Postgres)
+    and returns dictionary-like rows.
+    """
+    conn = get_raw_connection()
+    use_pg = is_postgres() and not isinstance(conn, sqlite3.Connection)
+    
     try:
-        with conn:
-            conn.execute("""
+        if use_pg:
+            import psycopg2.extras
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            pg_query = query.replace("?", "%s")
+            cursor.execute(pg_query, params)
+        else:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+
+        result = None
+        if fetchone:
+            row = cursor.fetchone()
+            result = dict(row) if row else None
+        elif fetchall:
+            rows = cursor.fetchall()
+            result = [dict(r) for r in rows] if rows else []
+
+        if commit:
+            conn.commit()
+
+        return result
+    except Exception as e:
+        if commit and conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise e
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def init_user_db():
+    """
+    Initializes users, chat_sessions, and user_sessions tables
+    in either PostgreSQL or SQLite, then seeds the default demo user.
+    """
+    conn = get_raw_connection()
+    use_pg = is_postgres() and not isinstance(conn, sqlite3.Connection)
+
+    try:
+        cursor = conn.cursor()
+        if use_pg:
+            # PostgreSQL Schema
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_login TEXT
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_email TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    selected_document_ids TEXT,
+                    active_doc_id TEXT,
+                    messages TEXT NOT NULL
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_email ON chat_sessions(user_email);
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    token TEXT PRIMARY KEY,
+                    user_email TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_sessions_email ON user_sessions(user_email);
+            """)
+            conn.commit()
+        else:
+            # SQLite Schema
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT UNIQUE NOT NULL,
@@ -40,7 +185,7 @@ def init_user_db():
                     last_login TEXT
                 );
             """)
-            conn.execute("""
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id TEXT PRIMARY KEY,
                     user_email TEXT NOT NULL COLLATE NOCASE,
@@ -51,10 +196,10 @@ def init_user_db():
                     messages TEXT NOT NULL
                 );
             """)
-            conn.execute("""
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_email ON chat_sessions(user_email);
             """)
-            conn.execute("""
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_sessions (
                     token TEXT PRIMARY KEY,
                     user_email TEXT NOT NULL COLLATE NOCASE,
@@ -62,11 +207,15 @@ def init_user_db():
                     expires_at TEXT
                 );
             """)
-            conn.execute("""
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_sessions_email ON user_sessions(user_email);
             """)
+            conn.commit()
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     create_demo_user_if_needed()
     migrate_legacy_json_sessions_if_needed()
@@ -104,11 +253,13 @@ def register_user(name: str, email: str, password: str) -> Tuple[bool, str, Opti
         return False, "Password must be at least 6 characters long.", None
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE email = ?", (clean_email,))
-        if cursor.fetchone():
+        existing = execute_db(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER(?)",
+            (clean_email,),
+            fetchone=True,
+        )
+        if existing:
             return False, "An account with this email address already exists.", None
 
         user_id = f"usr_{uuid.uuid4().hex[:12]}"
@@ -116,14 +267,14 @@ def register_user(name: str, email: str, password: str) -> Tuple[bool, str, Opti
         pwd_hash = hash_password(password, salt_hex)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (user_id, clean_name, clean_email, pwd_hash, salt_hex, now_str, now_str),
-            )
+        execute_db(
+            """
+            INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, clean_name, clean_email, pwd_hash, salt_hex, now_str, now_str),
+            commit=True,
+        )
 
         user_dict = {
             "user_id": user_id,
@@ -135,14 +286,14 @@ def register_user(name: str, email: str, password: str) -> Tuple[bool, str, Opti
         user_dict["token"] = token
         return True, "Account created successfully!", user_dict
     except Exception as e:
+        logger.error(f"Registration exception: {e}")
         return False, f"Registration error: {e}", None
-    finally:
-        conn.close()
 
 
 def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Validates user credentials and updates last login timestamp.
+    Returns clear, user-friendly messages distinguishing between missing user vs wrong password.
     Returns: (success, message, user_dict)
     """
     clean_email = email.strip().lower()
@@ -150,14 +301,23 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
         return False, "Email and password are required.", None
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE email = ?", (clean_email,))
-        row = cursor.fetchone()
+        row = execute_db(
+            "SELECT * FROM users WHERE LOWER(email) = LOWER(?)",
+            (clean_email,),
+            fetchone=True,
+        )
 
         if not row:
-            return False, "Invalid email or password.", None
+            if is_postgres():
+                return False, "No account found with this email. Please check your spelling or create an account.", None
+            else:
+                return (
+                    False,
+                    "No account found with this email. Note: If running on Render free tier, server restarts wipe local storage. "
+                    "Please create an account or connect a PostgreSQL database.",
+                    None,
+                )
 
         salt_hex = row["salt"]
         stored_hash = row["password_hash"]
@@ -165,11 +325,14 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
 
         # Constant-time comparison prevents timing attacks
         if not hmac.compare_digest(stored_hash, attempt_hash):
-            return False, "Invalid email or password.", None
+            return False, "Incorrect password. Please verify and try again.", None
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with conn:
-            conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (now_str, row["id"]))
+        execute_db(
+            "UPDATE users SET last_login = ? WHERE id = ?",
+            (now_str, row["id"]),
+            commit=True,
+        )
 
         user_dict = {
             "user_id": row["user_id"],
@@ -182,14 +345,12 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
         user_dict["token"] = token
         return True, f"Welcome back, {row['name']}!", user_dict
     except Exception as e:
+        logger.error(f"Authentication exception: {e}")
         return False, f"Authentication error: {e}", None
-    finally:
-        conn.close()
 
 
 def generate_session_token(email: str, duration_days: int = 30) -> str:
     """Generates and persists a secure session token for the user."""
-    from datetime import timedelta
     clean_email = email.strip().lower()
     token = f"dmtk_{secrets.token_urlsafe(32)}"
     now = datetime.now()
@@ -197,19 +358,19 @@ def generate_session_token(email: str, duration_days: int = 30) -> str:
     expires_at = (now + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M:%S")
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO user_sessions (token, user_email, created_at, expires_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (token, clean_email, created_at, expires_at),
-            )
+        execute_db(
+            """
+            INSERT INTO user_sessions (token, user_email, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (token, clean_email, created_at, expires_at),
+            commit=True,
+        )
         return token
-    finally:
-        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to persist session token: {e}")
+        return token
 
 
 def validate_session_token(token: str) -> Optional[Dict[str, Any]]:
@@ -237,29 +398,30 @@ def validate_session_token(token: str) -> Optional[Dict[str, Any]]:
 
     # 2. Database session check
     init_user_db()
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute(
+        row = execute_db(
             "SELECT user_email, expires_at FROM user_sessions WHERE token = ?",
             (clean_token,),
+            fetchone=True,
         )
-        row = cursor.fetchone()
         if not row:
             return None
 
-        expires_at_str = row["expires_at"]
+        expires_at_str = row.get("expires_at")
         if expires_at_str:
-            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-            if datetime.now() > expires_at:
-                return None
+            try:
+                expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() > expires_at:
+                    return None
+            except Exception:
+                pass
 
         email = row["user_email"]
-        cursor.execute(
-            "SELECT user_id, name, email, created_at, last_login FROM users WHERE email = ?",
+        user_row = execute_db(
+            "SELECT user_id, name, email, created_at, last_login FROM users WHERE LOWER(email) = LOWER(?)",
             (email,),
+            fetchone=True,
         )
-        user_row = cursor.fetchone()
         if user_row:
             u_dict = dict(user_row)
             u_dict["token"] = clean_token
@@ -272,10 +434,8 @@ def validate_session_token(token: str) -> Optional[Dict[str, Any]]:
             "token": clean_token,
         }
     except Exception as e:
-        print(f"Token validation error: {e}")
+        logger.warning(f"Token validation error: {e}")
         return None
-    finally:
-        conn.close()
 
 
 def revoke_session_token(token: str) -> bool:
@@ -284,15 +444,11 @@ def revoke_session_token(token: str) -> bool:
         return False
     clean_token = token.replace("Bearer ", "").strip()
     init_user_db()
-    conn = get_db_connection()
     try:
-        with conn:
-            conn.execute("DELETE FROM user_sessions WHERE token = ?", (clean_token,))
+        execute_db("DELETE FROM user_sessions WHERE token = ?", (clean_token,), commit=True)
         return True
     except Exception:
         return False
-    finally:
-        conn.close()
 
 
 def get_or_create_demo_token() -> str:
@@ -316,7 +472,6 @@ def sanitize_chat_messages(messages: Any) -> list:
         clean_msg = {}
         for k, v in msg.items():
             if isinstance(v, bytes):
-                # Never store raw bytes in JSON sessions
                 continue
             elif isinstance(v, dict):
                 clean_msg[k] = {
@@ -338,40 +493,37 @@ def sanitize_chat_messages(messages: Any) -> list:
 
 def create_demo_user_if_needed():
     """Seeds a ready-to-test demo account: demo@docmind.ai / Demo@123."""
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE email = 'demo@docmind.ai'")
-        if not cursor.fetchone():
+        row = execute_db(
+            "SELECT id FROM users WHERE LOWER(email) = 'demo@docmind.ai'",
+            fetchone=True,
+        )
+        if not row:
             salt_hex = secrets.token_hex(16)
             pwd_hash = hash_password("Demo@123", salt_hex)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    ("usr_demo001", "Demo User", "demo@docmind.ai", pwd_hash, salt_hex, now_str, now_str),
-                )
+            execute_db(
+                """
+                INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("usr_demo001", "Demo User", "demo@docmind.ai", pwd_hash, salt_hex, now_str, now_str),
+                commit=True,
+            )
     except Exception as e:
-        print(f"Warning initializing demo user: {e}")
-    finally:
-        conn.close()
+        logger.warning(f"Warning initializing demo user: {e}")
 
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     """Retrieves user profile by user_id."""
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, name, email, created_at, last_login FROM users WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
+        return execute_db(
+            "SELECT user_id, name, email, created_at, last_login FROM users WHERE user_id = ?",
+            (user_id,),
+            fetchone=True,
+        )
+    except Exception:
         return None
-    finally:
-        conn.close()
 
 
 # =========================================================
@@ -388,27 +540,25 @@ def get_user_chat_sessions(email: str) -> List[Dict[str, Any]]:
         return []
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute(
+        rows = execute_db(
             """
             SELECT id, user_email, title, updated_at, selected_document_ids, active_doc_id, messages
             FROM chat_sessions
-            WHERE user_email = ?
-            ORDER BY rowid DESC
+            WHERE LOWER(user_email) = LOWER(?)
+            ORDER BY updated_at DESC
             """,
-            (clean_email,)
+            (clean_email,),
+            fetchall=True,
         )
-        rows = cursor.fetchall()
         sessions = []
         for r in rows:
             try:
-                msgs = json.loads(r["messages"]) if r["messages"] else []
+                msgs = json.loads(r["messages"]) if r.get("messages") else []
             except Exception:
                 msgs = []
             try:
-                doc_ids = json.loads(r["selected_document_ids"]) if r["selected_document_ids"] else []
+                doc_ids = json.loads(r["selected_document_ids"]) if r.get("selected_document_ids") else []
             except Exception:
                 doc_ids = []
             sessions.append({
@@ -417,12 +567,13 @@ def get_user_chat_sessions(email: str) -> List[Dict[str, Any]]:
                 "title": r["title"],
                 "updated_at": r["updated_at"],
                 "selected_document_ids": doc_ids,
-                "active_doc_id": r["active_doc_id"],
+                "active_doc_id": r.get("active_doc_id"),
                 "messages": msgs,
             })
         return sessions
-    finally:
-        conn.close()
+    except Exception as e:
+        logger.warning(f"Error getting chat sessions: {e}")
+        return []
 
 
 def save_user_chat_session(email: str, session: Dict[str, Any]):
@@ -434,34 +585,33 @@ def save_user_chat_session(email: str, session: Dict[str, Any]):
         return
 
     init_user_db()
-    conn = get_db_connection()
     try:
         sess_id = session["id"]
         title = session.get("title", "New Conversation")
-        updated_at = session.get("updated_at") or datetime.now().strftime("%d %b, %H:%M")
+        updated_at = session.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         doc_ids_json = json.dumps(session.get("selected_document_ids", []), default=str)
         active_doc_id = session.get("active_doc_id")
         raw_msgs = session.get("messages", [])
         safe_msgs = sanitize_chat_messages(raw_msgs)
         messages_json = json.dumps(safe_msgs, ensure_ascii=False, default=str)
 
-        with conn:
-            conn.execute(
-                """
-                INSERT INTO chat_sessions (id, user_email, title, updated_at, selected_document_ids, active_doc_id, messages)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    user_email = excluded.user_email,
-                    title = excluded.title,
-                    updated_at = excluded.updated_at,
-                    selected_document_ids = excluded.selected_document_ids,
-                    active_doc_id = excluded.active_doc_id,
-                    messages = excluded.messages
-                """,
-                (sess_id, clean_email, title, updated_at, doc_ids_json, active_doc_id, messages_json),
-            )
-    finally:
-        conn.close()
+        execute_db(
+            """
+            INSERT INTO chat_sessions (id, user_email, title, updated_at, selected_document_ids, active_doc_id, messages)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                user_email = excluded.user_email,
+                title = excluded.title,
+                updated_at = excluded.updated_at,
+                selected_document_ids = excluded.selected_document_ids,
+                active_doc_id = excluded.active_doc_id,
+                messages = excluded.messages
+            """,
+            (sess_id, clean_email, title, updated_at, doc_ids_json, active_doc_id, messages_json),
+            commit=True,
+        )
+    except Exception as e:
+        logger.warning(f"Error saving chat session: {e}")
 
 
 def delete_user_chat_session(email: str, session_id: str):
@@ -473,15 +623,14 @@ def delete_user_chat_session(email: str, session_id: str):
         return
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        with conn:
-            conn.execute(
-                "DELETE FROM chat_sessions WHERE id = ? AND user_email = ?",
-                (session_id, clean_email),
-            )
-    finally:
-        conn.close()
+        execute_db(
+            "DELETE FROM chat_sessions WHERE id = ? AND LOWER(user_email) = LOWER(?)",
+            (session_id, clean_email),
+            commit=True,
+        )
+    except Exception as e:
+        logger.warning(f"Error deleting chat session: {e}")
 
 
 def clear_all_user_chat_sessions(email: str):
@@ -493,31 +642,28 @@ def clear_all_user_chat_sessions(email: str):
         return
 
     init_user_db()
-    conn = get_db_connection()
     try:
-        with conn:
-            conn.execute(
-                "DELETE FROM chat_sessions WHERE user_email = ?",
-                (clean_email,),
-            )
-    finally:
-        conn.close()
+        execute_db(
+            "DELETE FROM chat_sessions WHERE LOWER(user_email) = LOWER(?)",
+            (clean_email,),
+            commit=True,
+        )
+    except Exception as e:
+        logger.warning(f"Error clearing chat sessions: {e}")
 
 
 def migrate_legacy_json_sessions_if_needed():
     """
-    Automatically migrates any existing JSON session files into SQLite chat_sessions table.
+    Automatically migrates any existing JSON session files into SQLite/Postgres chat_sessions table.
     """
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM chat_sessions")
-        count = cursor.fetchone()[0]
+        row = execute_db("SELECT COUNT(*) as cnt FROM chat_sessions", fetchone=True)
+        count = row["cnt"] if row and "cnt" in row else (list(row.values())[0] if row else 0)
         if count > 0:
             return  # Already migrated
 
-        cursor.execute("SELECT user_id, email FROM users")
-        user_map = {row["user_id"]: row["email"] for row in cursor.fetchall()}
+        user_rows = execute_db("SELECT user_id, email FROM users", fetchall=True) or []
+        user_map = {r["user_id"]: r["email"] for r in user_rows}
         user_map["default"] = "demo@docmind.ai"
 
         data_dir = DB_PATH.parent
@@ -541,7 +687,4 @@ def migrate_legacy_json_sessions_if_needed():
             except Exception:
                 pass
     except Exception as e:
-        print(f"Warning during legacy session migration: {e}")
-    finally:
-        conn.close()
-
+        logger.warning(f"Warning during legacy session migration: {e}")
