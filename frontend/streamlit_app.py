@@ -13,6 +13,9 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from dotenv import load_dotenv
+load_dotenv(ROOT_DIR / ".env")
+
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
@@ -989,20 +992,6 @@ if st.sidebar.button("🧹 Clear Messages", use_container_width=True):
 # =========================================================
 # SYSTEM DIAGNOSTICS & HEALTH CHECK
 # =========================================================
-
-has_gemini_api_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
-if not has_gemini_api_key:
-    st.warning(
-        "⚠️ **Google Gemini API Key is missing on this server!**\n\n"
-        "Because `GEMINI_API_KEY` is not set in your environment variables, files cannot be embedded or analyzed, and AI answers cannot be generated.\n\n"
-        "**How to fix on Render**:\n"
-        "1. Open your **[Render Dashboard](https://dashboard.render.com/)**.\n"
-        "2. Click your DocMind AI Web Service → go to the **Environment** tab.\n"
-        "3. Click **Add Environment Variable**:\n"
-        "   - **Key**: `GEMINI_API_KEY`\n"
-        "   - **Value**: your Google Gemini API key from [Google AI Studio](https://aistudio.google.com/)\n"
-        "4. Click **Save Changes** and allow Render to redeploy."
-    )
 
 @st.cache_data(ttl=20)
 def check_backend_alive():
