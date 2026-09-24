@@ -6,6 +6,7 @@ from functools import wraps
 
 logger = logging.getLogger("docmind.resilience")
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
 
 class GeminiServiceError(Exception):

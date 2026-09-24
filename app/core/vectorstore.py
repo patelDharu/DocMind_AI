@@ -1,6 +1,9 @@
 # app/core/vectorstore.py
 
+import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import logging
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 from typing import List, Dict, Any
 import chromadb
 from chromadb.config import Settings
@@ -432,7 +435,12 @@ class VectorStore:
                 if not chunks:
                     return False
 
-            self.collection.delete(where={"document_id": document_id})
+            where_clause = (
+                {"$and": [{"document_id": document_id}, {"user_email": clean_email}]}
+                if clean_email
+                else {"document_id": document_id}
+            )
+            self.collection.delete(where=where_clause)
             self.bm25_docs = [
                 d for d in self.bm25_docs
                 if not (d.get("document_id") == document_id and (not clean_email or d.get("user_email") == clean_email))
@@ -440,7 +448,7 @@ class VectorStore:
             self._rebuild_bm25()
             return True
         except Exception as e:
-            print(f"Error deleting document {document_id}: {e}")
+            logger.error(f"Error deleting document {document_id}: {e}")
             return False
 
     def clear_all(self, user_email: str | None = None):
