@@ -141,18 +141,84 @@ class RAGPipeline:
             min_relevance_threshold=0.08,
         )
 
-        # 3. HALLUCINATION PROTECTION: Evaluates both composite score & dense semantic similarity
+        # 3. HALLUCINATION PROTECTION & HYBRID GENERAL CHAT INTELLIGENCE
         top_score = retrieved_chunks[0].get("score", 0.0) if retrieved_chunks else 0.0
         top_dense = max((c.get("dense_score", 0.0) for c in retrieved_chunks), default=0.0)
 
-        # Reject only if neither semantic density nor composite relevance indicates a match
+        # Case A: No specific document targeted and no document chunks exist in library
+        # Provide general conversational AI response for any prompt
+        if not target_ids and not retrieved_chunks:
+            history_str = ""
+            if history and len(history) > 0:
+                turns = []
+                for h in history[-4:]:
+                    role = "User" if h.get("role") == "user" else "Assistant"
+                    turns.append(f"{role}: {h.get('content', '')}")
+                history_str = "CONVERSATION HISTORY:\n" + "\n".join(turns) + "\n\n"
+
+            general_prompt = f"""
+{history_str}CURRENT USER QUESTION:
+{raw_question}
+
+INSTRUCTIONS:
+You are DocMind AI, a helpful, intelligent trilingual AI assistant.
+Answer the user's question accurately, helpfully, and comprehensively in {detected_lang}.
+Use clear Markdown formatting, bullet points, and code blocks where helpful.
+"""
+            try:
+                answer_text = self._generate_answer(general_prompt)
+                return {
+                    "answer": answer_text,
+                    "sources": [],
+                    "confidence": "high",
+                    "rewritten_query": search_query if search_query != raw_question else None,
+                    "detected_language": detected_lang,
+                }
+            except Exception as e:
+                return {
+                    "answer": f"Service Notice: {str(e)}",
+                    "sources": [],
+                    "confidence": "low",
+                    "rewritten_query": search_query,
+                    "detected_language": detected_lang,
+                }
+
+        # Case B: A document was targeted or retrieved, but relevance score is low
         if not retrieved_chunks or (top_score < 0.22 and top_dense < 0.30):
-            return {
-                "answer": NOT_FOUND_MESSAGES.get(detected_lang, NOT_FOUND_MESSAGES["en"]),
-                "sources": [],
-                "confidence": "low",
-                "rewritten_query": search_query if search_query != raw_question else None,
-            }
+            history_str = ""
+            if history and len(history) > 0:
+                turns = []
+                for h in history[-4:]:
+                    role = "User" if h.get("role") == "user" else "Assistant"
+                    turns.append(f"{role}: {h.get('content', '')}")
+                history_str = "CONVERSATION HISTORY:\n" + "\n".join(turns) + "\n\n"
+
+            fallback_prompt = f"""
+{history_str}CURRENT USER QUESTION:
+{raw_question}
+
+INSTRUCTIONS:
+You are DocMind AI. The user asked a question, but their currently selected document does not contain this specific information.
+First, politely state in 1 brief sentence in {detected_lang} that the targeted document does not contain information on this topic.
+Then, directly answer the user's question using your general knowledge in {detected_lang} with clear, helpful details.
+"""
+            try:
+                answer_text = self._generate_answer(fallback_prompt)
+                return {
+                    "answer": answer_text,
+                    "sources": [],
+                    "confidence": "medium",
+                    "rewritten_query": search_query if search_query != raw_question else None,
+                    "detected_language": detected_lang,
+                }
+            except Exception:
+                return {
+                    "answer": NOT_FOUND_MESSAGES.get(detected_lang, NOT_FOUND_MESSAGES["en"]),
+                    "sources": [],
+                    "confidence": "low",
+                    "rewritten_query": search_query if search_query != raw_question else None,
+                    "detected_language": detected_lang,
+                }
 
         # 4. CONTEXT ASSEMBLY
         context_parts = []

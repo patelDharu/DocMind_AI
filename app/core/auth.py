@@ -492,26 +492,34 @@ def sanitize_chat_messages(messages: Any) -> list:
 
 
 def create_demo_user_if_needed():
-    """Seeds a ready-to-test demo account: demo@docmind.ai / Demo@123."""
-    try:
-        row = execute_db(
-            "SELECT id FROM users WHERE LOWER(email) = 'demo@docmind.ai'",
-            fetchone=True,
-        )
-        if not row:
-            salt_hex = secrets.token_hex(16)
-            pwd_hash = hash_password("Demo@123", salt_hex)
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            execute_db(
-                """
-                INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("usr_demo001", "Demo User", "demo@docmind.ai", pwd_hash, salt_hex, now_str, now_str),
-                commit=True,
+    """Seeds default accounts (demo + Dhara) so they persist even on Render free tier restarts."""
+    default_users = [
+        ("usr_demo001", "Demo User", "demo@docmind.ai", "Demo@123"),
+        ("usr_dhara001", "Dhara Matholiya", "dharamatholiya1116@gmail.com", "Dhara@123"),
+    ]
+    for uid, uname, uemail, upass in default_users:
+        try:
+            clean_email = uemail.strip().lower()
+            row = execute_db(
+                "SELECT id FROM users WHERE LOWER(email) = LOWER(?)",
+                (clean_email,),
+                fetchone=True,
             )
-    except Exception as e:
-        logger.warning(f"Warning initializing demo user: {e}")
+            if not row:
+                salt_hex = secrets.token_hex(16)
+                pwd_hash = hash_password(upass, salt_hex)
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                execute_db(
+                    """
+                    INSERT INTO users (user_id, name, email, password_hash, salt, created_at, last_login)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (uid, uname, clean_email, pwd_hash, salt_hex, now_str, now_str),
+                    commit=True,
+                )
+                logger.info(f"Initialized persistent account: {clean_email}")
+        except Exception as e:
+            logger.warning(f"Warning initializing user {uemail}: {e}")
 
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:

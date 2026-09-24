@@ -490,20 +490,6 @@ window.parent.postMessage({
 
 setFrameHeight(68);
 
-function updatePlaceholder() {
-    if (!attachedFile && chatInput) {
-        if (window.innerWidth <= 600) {
-            chatInput.placeholder = "Ask in English, हिन्दी, ગુજરાતી...";
-        } else {
-            chatInput.placeholder = "Ask a question in English, हिन्दी, or ગુજરાતી...";
-        }
-    }
-}
-window.addEventListener("resize", () => {
-    setFrameHeight();
-    updatePlaceholder();
-});
-
 const plusBtn = document.getElementById("plusBtn");
 const menuWrapper = document.getElementById("menuWrapper");
 const menuUploadFile = document.getElementById("menuUploadFile");
@@ -515,8 +501,11 @@ const chipRemoveBtn = document.getElementById("chipRemoveBtn");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
 const micBtn = document.getElementById("micBtn");
+const menuGoogleDrive = document.getElementById("menuGoogleDrive");
 
 let attachedFile = null;
+let attachedDriveUrl = null;
+let isSubmitting = false;
 
 function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '0 B';
@@ -526,25 +515,62 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-const menuGoogleDrive = document.getElementById("menuGoogleDrive");
-let attachedDriveUrl = null;
+function updatePlaceholder() {
+    if (!chatInput) return;
+    if (attachedFile) {
+        chatInput.placeholder = "Ask any question about " + attachedFile.name + " (or press Enter to research)...";
+    } else if (attachedDriveUrl) {
+        chatInput.placeholder = "Ask any question about this Google Drive document (or press Enter to research)...";
+    } else {
+        if (window.innerWidth <= 600) {
+            chatInput.placeholder = "Ask in English, हिन्दी, or ગુજરાતી...";
+        } else {
+            chatInput.placeholder = "Ask a question in English, हिन्दी, or ગુજરાતી...";
+        }
+    }
+}
+
+function updateSendState() {
+    if (!chatInput || !sendBtn) return;
+    const hasText = chatInput.value.trim().length > 0;
+    const hasFile = attachedFile !== null || attachedDriveUrl !== null;
+    sendBtn.disabled = !(hasText || hasFile) || isSubmitting;
+}
+
+function resetInputState() {
+    isSubmitting = false;
+    if (chatInput) {
+        chatInput.disabled = false;
+    }
+    updatePlaceholder();
+    updateSendState();
+    setFrameHeight();
+}
+
+// Listen to Streamlit render/rerun messages to always keep input alive
+window.addEventListener("message", (event) => {
+    if (event.data && (event.data.type === "streamlit:render" || event.data.isStreamlitMessage)) {
+        resetInputState();
+    }
+});
+
+window.addEventListener("resize", () => {
+    setFrameHeight();
+    updatePlaceholder();
+});
 
 // Plus Button Toggle
 plusBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     const isOpen = menuWrapper.classList.toggle("open");
     plusBtn.classList.toggle("active", isOpen);
-    if (isOpen) {
-        setFrameHeight(195); // Expand frame to show both popup menu options cleanly
-    } else {
-        setFrameHeight(68);
-    }
+    setFrameHeight(isOpen ? 190 : 68);
 });
 
-// Close menu when clicking outside
+// Close popup on outside click
 document.addEventListener("click", (e) => {
-    if (!menuWrapper.contains(e.target) && e.target !== plusBtn) {
-        if (menuWrapper.classList.contains("open")) {
+    if (menuWrapper.classList.contains("open")) {
+        if (!menuWrapper.contains(e.target) && !plusBtn.contains(e.target)) {
             menuWrapper.classList.remove("open");
             plusBtn.classList.remove("active");
             setFrameHeight(68);
@@ -586,8 +612,7 @@ function attachGoogleDriveUrl(rawUrl) {
     chipFilename.textContent = "Google Drive Document";
     chipFilesize.textContent = "Cloud Link";
     attachmentChip.style.display = "inline-flex";
-    chatInput.placeholder = "Ask any question about this Google Drive document (or press Enter to research)...";
-    updateSendState();
+    resetInputState();
     chatInput.focus();
 }
 
@@ -615,8 +640,7 @@ hiddenFileInput.addEventListener("change", () => {
         chipFilename.textContent = attachedFile.name;
         chipFilesize.textContent = formatBytes(attachedFile.size);
         attachmentChip.style.display = "inline-flex";
-        chatInput.placeholder = "Ask any question about " + attachedFile.name + " (or press Enter to research)...";
-        updateSendState();
+        resetInputState();
         chatInput.focus();
     }
 });
@@ -631,27 +655,29 @@ function clearAttachment() {
     attachedDriveUrl = null;
     hiddenFileInput.value = "";
     attachmentChip.style.display = "none";
-    updatePlaceholder();
-    updateSendState();
-}
-
-function updateSendState() {
-    const hasText = chatInput.value.trim().length > 0;
-    const hasFile = attachedFile !== null || attachedDriveUrl !== null;
-    sendBtn.disabled = !(hasText || hasFile);
+    resetInputState();
 }
 
 chatInput.addEventListener("input", updateSendState);
 
 function submitAction(overrideText) {
-    if (chatInput.disabled) return;
+    if (isSubmitting) return;
     const textQuery = (overrideText !== undefined ? overrideText : chatInput.value).trim();
     if (!textQuery && !attachedFile && !attachedDriveUrl) return;
 
+    isSubmitting = true;
+    sendBtn.disabled = true;
+
+    // Safety timeout to prevent permanent freeze
+    setTimeout(() => {
+        if (isSubmitting) {
+            resetInputState();
+        }
+    }, 6000);
+
     if (attachedDriveUrl) {
         const driveUrlToSend = attachedDriveUrl;
-        sendBtn.disabled = true;
-        chatInput.disabled = true;
+        const queryToSend = textQuery;
         chatInput.value = "";
         attachmentChip.style.display = "none";
         chatInput.placeholder = "⏳ Downloading from Google Drive & researching with Gemini AI...";
@@ -659,17 +685,17 @@ function submitAction(overrideText) {
         sendToStreamlit({
             type: "drive_and_prompt",
             drive_url: driveUrlToSend,
-            content: textQuery,
+            content: queryToSend,
             msg_id: Date.now() + "_" + Math.random().toString(36).substr(2, 6)
         });
         attachedDriveUrl = null;
+        setTimeout(resetInputState, 2000);
         return;
     }
 
     if (attachedFile) {
         const fileToSend = attachedFile;
-        sendBtn.disabled = true;
-        chatInput.disabled = true;
+        const queryToSend = textQuery;
         chatInput.value = "";
         attachmentChip.style.display = "none";
         chatInput.placeholder = "⏳ Uploading & researching " + fileToSend.name + "...";
@@ -681,29 +707,27 @@ function submitAction(overrideText) {
                 type: "file_and_prompt",
                 filename: fileToSend.name,
                 file_base64: b64Data,
-                content: textQuery,
+                content: queryToSend,
                 msg_id: Date.now() + "_" + Math.random().toString(36).substr(2, 6)
             });
             attachedFile = null;
             hiddenFileInput.value = "";
+            setTimeout(resetInputState, 2000);
         };
         reader.onerror = function() {
-            sendBtn.disabled = false;
-            chatInput.disabled = false;
+            resetInputState();
             attachmentChip.style.display = "inline-flex";
-            updatePlaceholder();
-            updateSendState();
             alert("Error reading file. Please try again.");
         };
         reader.readAsDataURL(fileToSend);
     } else {
+        chatInput.value = "";
         sendToStreamlit({
             type: "text",
             content: textQuery,
             msg_id: Date.now() + "_" + Math.random().toString(36).substr(2, 6)
         });
-        chatInput.value = "";
-        updateSendState();
+        setTimeout(resetInputState, 1500);
     }
 }
 
@@ -711,7 +735,6 @@ sendBtn.addEventListener("click", () => submitAction());
 chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
         e.preventDefault();
-        if (chatInput.disabled) return;
         submitAction();
     }
 });
@@ -732,8 +755,10 @@ if (SpeechRecognition) {
     recognition.onstart = () => {
         isRecording = true;
         micBtn.classList.add("recording");
-        chatInput.placeholder = "🎙️ Listening... speak now in English, Hindi, or Gujarati...";
+        chatInput.placeholder = "🎤 Listening... speak now in English, Hindi, or Gujarati...";
         preSpeechText = chatInput.value.trim();
+        chatInput.disabled = false;
+        isSubmitting = false;
         sendBtn.disabled = true;
     };
 
@@ -744,17 +769,23 @@ if (SpeechRecognition) {
         }
         const fullText = preSpeechText ? (preSpeechText + " " + transcript) : transcript;
         chatInput.value = fullText;
+        chatInput.disabled = false;
+        isSubmitting = false;
         updateSendState();
     };
 
     recognition.onerror = (event) => {
         console.warn("Speech recognition error:", event.error);
         stopSpeech();
+        chatInput.disabled = false;
+        isSubmitting = false;
         updateSendState();
     };
 
     recognition.onend = () => {
         stopSpeech();
+        chatInput.disabled = false;
+        isSubmitting = false;
         updateSendState();
         chatInput.focus();
     };
@@ -775,6 +806,8 @@ micBtn.addEventListener("click", () => {
     } else {
         if (SpeechRecognition) {
             try {
+                chatInput.disabled = false;
+                isSubmitting = false;
                 recognition.start();
             } catch(e) {
                 console.warn("Speech recognition start failed:", e);
@@ -784,6 +817,9 @@ micBtn.addEventListener("click", () => {
         }
     }
 });
+
+// Initial boot
+resetInputState();
 </script>
 </body>
 </html>
