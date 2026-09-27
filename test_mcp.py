@@ -23,10 +23,17 @@ async def test_mcp():
     tool_names = [t.name for t in tools]
     print(f"\n[1/3] Checking Tool Discovery...")
     print(f"  Available MCP Tools: {tool_names}")
-    expected_tools = ["search_documents", "ask_document", "list_user_documents", "summarize_document"]
+    expected_tools = [
+        "search_documents",
+        "ask_document",
+        "list_user_documents",
+        "summarize_document",
+        "search_google_drive",
+        "import_google_drive_document",
+    ]
     for exp in expected_tools:
         assert exp in tool_names, f"Missing MCP Tool: {exp}"
-    print("  [OK] All 4 MCP Tools registered and discoverable.")
+    print(f"  [OK] All {len(expected_tools)} MCP Tools registered and discoverable.")
 
     # 2. Test list_user_documents tool
     print("\n[2/3] Testing list_user_documents execution...")

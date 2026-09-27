@@ -149,6 +149,10 @@ class DriveImportRequest(BaseModel):
     url: str
 
 
+class DriveMcpImportRequest(BaseModel):
+    file_id: str
+
+
 class RegisterRequest(BaseModel):
     name: str
     email: str
@@ -938,3 +942,181 @@ def get_action_alert(
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to analyze actions: {e}")
+
+
+# =========================================================
+# 11. GOOGLE DRIVE MCP ENDPOINTS (OAuth2 & MCP Tools)
+# =========================================================
+
+@app.get("/drive/mcp/status")
+def get_drive_mcp_status(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Checks whether Google Drive OAuth is configured and authenticated."""
+    from app.core.gdrive_mcp import is_gdrive_configured, is_authenticated, CREDENTIALS_DIR, get_client_secrets_path
+    configured = is_gdrive_configured()
+    authenticated = is_authenticated()
+    secrets_path = get_client_secrets_path()
+
+    return {
+        "configured": configured,
+        "authenticated": authenticated,
+        "credentials_dir": str(CREDENTIALS_DIR),
+        "client_secrets_file": secrets_path.name if secrets_path else None,
+        "message": (
+            "Google Drive is ready."
+            if authenticated
+            else "OAuth credentials missing or login required."
+        ),
+    }
+
+
+@app.get("/drive/mcp/files")
+def list_or_search_drive_mcp_files(
+    query: Optional[str] = Query(None),
+    limit: int = Query(15, ge=1, le=50),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Searches or lists files from user's Google Drive via OAuth2 MCP service."""
+    from app.core.gdrive_mcp import is_gdrive_configured, is_authenticated, list_drive_files
+
+    if not is_gdrive_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Google Drive credentials not found. Please place 'gcp-oauth.keys.json' in the credentials folder.",
+        )
+    if not is_authenticated():
+        raise HTTPException(
+            status_code=401,
+            detail="Google Drive is not authenticated. Please perform initial login.",
+        )
+
+    try:
+        files = list_drive_files(query=query, page_size=limit)
+        return {"status": "success", "files": files, "count": len(files)}
+    except Exception as e:
+        logger.error(f"Error fetching Google Drive files: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch Google Drive files: {e}")
+
+
+@app.post("/drive/mcp/import")
+def import_drive_mcp_file(
+    req: DriveMcpImportRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Downloads a Google Drive document by file ID and ingests it into DocMind AI RAG."""
+    from app.core.gdrive_mcp import is_gdrive_configured, is_authenticated, download_drive_file
+
+    if not is_gdrive_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Google Drive credentials not found. Please place 'gcp-oauth.keys.json' in credentials folder.",
+        )
+    if not is_authenticated():
+        raise HTTPException(
+            status_code=401,
+            detail="Google Drive is not authenticated. Please authenticate first.",
+        )
+
+    user_email = current_user.get("email", "demo@docmind.ai").strip().lower()
+    try:
+        dest_path, original_filename = download_drive_file(req.file_id, UPLOAD_DIR)
+    except Exception as e:
+        logger.error(f"Failed to download Drive file {req.file_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to download Google Drive document: {e}")
+
+    document_id = uuid.uuid4().hex
+    try:
+        gc.collect()
+        records = load_document(str(dest_path))
+        if not records:
+            records = [{
+                "text": f"Google Drive Document: {original_filename}\n[Content processed]",
+                "metadata": {
+                    "source": original_filename,
+                    "page": 1,
+                    "char_count": len(original_filename),
+                    "user_email": user_email,
+                    "gdrive_file_id": req.file_id,
+                }
+            }]
+
+        for record in records:
+            metadata = record.get("metadata", {})
+            metadata["document_id"] = document_id
+            metadata["source"] = original_filename
+            metadata["user_email"] = user_email
+            metadata["gdrive_file_id"] = req.file_id
+            record["metadata"] = metadata
+
+        chunks = chunk_text(records)
+        if not chunks:
+            chunks = [{
+                "id": f"{document_id}_chunk_0",
+                "text": f"Document: {original_filename}",
+                "metadata": {
+                    "document_id": document_id,
+                    "source": original_filename,
+                    "page": 1,
+                    "chunk": 0,
+                    "user_email": user_email,
+                    "gdrive_file_id": req.file_id,
+                }
+            }]
+        else:
+            for c in chunks:
+                c_meta = c.get("metadata", {})
+                c_meta["user_email"] = user_email
+                c_meta["gdrive_file_id"] = req.file_id
+                c["metadata"] = c_meta
+
+        pipeline.ingest(chunks, user_email=user_email)
+
+        action_alert = {"requires_action": False, "urgency": "none"}
+        try:
+            doc_text = "\n\n".join([r.get("text", "") for r in records if r.get("text")])
+            action_alert = intelligence.analyze_action_and_deadlines(
+                document_text=doc_text[:8000],
+                filename=original_filename,
+                language="en",
+            )
+        except Exception as alert_err:
+            logger.warning(f"Action alert skipped for Google Drive doc {original_filename}: {alert_err}")
+
+        gc.collect()
+    except Exception as e:
+        if dest_path.exists():
+            try:
+                dest_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "status": "success",
+        "filename": original_filename,
+        "document_id": document_id,
+        "chunks_indexed": len(chunks),
+        "action_alert": action_alert,
+        "source": "google_drive_mcp",
+        "file_id": req.file_id,
+    }
+
+
+@app.post("/drive/mcp/authenticate")
+def trigger_drive_mcp_auth(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Triggers browser-based OAuth 2.0 authentication flow for Google Drive."""
+    from app.core.gdrive_mcp import is_gdrive_configured, get_gdrive_credentials
+
+    if not is_gdrive_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Google Cloud OAuth client secrets file ('gcp-oauth.keys.json') not found in credentials folder.",
+        )
+    try:
+        get_gdrive_credentials()
+        return {"status": "success", "message": "Google Drive authentication completed successfully!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {e}")

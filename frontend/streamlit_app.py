@@ -1,5 +1,6 @@
 # frontend/streamlit_app.py
 
+import re
 import base64
 import json
 import os
@@ -1005,6 +1006,76 @@ if documents:
 
 else:
     st.sidebar.info("No documents indexed yet. Upload a document to get started.")
+
+# 3. Google Drive MCP Integration
+with st.sidebar.expander("☁️ Google Drive (MCP)", expanded=False):
+    try:
+        drive_status_res = requests.get(f"{API_URL}/drive/mcp/status", headers=get_api_headers(), timeout=5)
+        drive_status = drive_status_res.json() if drive_status_res.ok else {"configured": False, "authenticated": False}
+    except Exception:
+        drive_status = {"configured": False, "authenticated": False}
+
+    if not drive_status.get("configured"):
+        st.markdown(
+            "⚠️ **OAuth Setup Required**\n\n"
+            "Place your Google Cloud OAuth client secrets file (`gcp-oauth.keys.json`) in the `credentials/` folder.\n\n"
+            "See `credentials/README.md` for steps."
+        )
+    elif not drive_status.get("authenticated"):
+        st.info("Google Drive credentials found. Click below to sign in via Google OAuth.")
+        if st.button("🔑 Sign in to Google Drive", key="gdrive_auth_btn", use_container_width=True):
+            with st.spinner("Opening browser window for Google authentication..."):
+                try:
+                    auth_res = requests.post(f"{API_URL}/drive/mcp/authenticate", headers=get_api_headers(), timeout=60)
+                    if auth_res.ok:
+                        st.success("Google Drive authenticated successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"Authentication failed: {auth_res.text}")
+                except Exception as auth_e:
+                    st.error(f"Error starting authentication: {auth_e}")
+    else:
+        st.markdown("<span style='color: #15803d; font-weight: 600;'>🟢 Connected to Google Drive</span>", unsafe_allow_html=True)
+        g_query = st.text_input("Search Drive Files:", key="gdrive_search_input", placeholder="Filter by document name...")
+        if st.button("🔄 Refresh Drive Files", key="gdrive_refresh_files_btn", use_container_width=True):
+            st.session_state.gdrive_refreshed = True
+
+        try:
+            params = {"limit": 10}
+            if g_query and g_query.strip():
+                params["query"] = g_query.strip()
+            files_res = requests.get(f"{API_URL}/drive/mcp/files", params=params, headers=get_api_headers(), timeout=10)
+            if files_res.ok:
+                drive_files = files_res.json().get("files", [])
+                if drive_files:
+                    st.caption(f"Showing {len(drive_files)} recent/matching files:")
+                    for df in drive_files:
+                        col_name, col_act = st.columns([3, 1.2])
+                        with col_name:
+                            st.markdown(f"<div style='font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📄 {df['name']}</div>", unsafe_allow_html=True)
+                        with col_act:
+                            if st.button("📥 Index", key=f"gdrive_idx_{df['id']}", use_container_width=True):
+                                with st.spinner(f"Indexing '{df['name']}' via MCP..."):
+                                    imp_res = requests.post(
+                                        f"{API_URL}/drive/mcp/import",
+                                        json={"file_id": df["id"]},
+                                        headers=get_api_headers(),
+                                        timeout=180,
+                                    )
+                                    if imp_res.ok:
+                                        data = imp_res.json()
+                                        st.session_state.active_doc_id = data.get("document_id")
+                                        st.session_state.selected_document_ids = [data.get("document_id")]
+                                        st.success(f"Indexed '{df['name']}'!")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Failed to import: {imp_res.text}")
+                else:
+                    st.caption("No files found matching criteria.")
+            else:
+                st.caption("Could not load Google Drive files.")
+        except Exception as file_e:
+            st.caption(f"Drive connection notice: {file_e}")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🧹 Clear Messages", use_container_width=True):

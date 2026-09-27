@@ -149,5 +149,65 @@ def summarize_document(
         return f"Error summarizing document: {str(e)}"
 
 
+@server.tool()
+def search_google_drive(query: str = "", max_results: int = 10) -> str:
+    """
+    Search documents in Google Drive via OAuth2 MCP integration.
+    """
+    try:
+        from app.core.gdrive_mcp import list_drive_files, is_gdrive_configured
+        if not is_gdrive_configured():
+            return "Google Drive OAuth credentials are not configured. Please place 'gcp-oauth.keys.json' in credentials/ folder."
+        files = list_drive_files(query=query if query.strip() else None, page_size=max_results)
+        if not files:
+            return f"No Google Drive files found matching: '{query}'"
+        lines = [f"Found {len(files)} file(s) in Google Drive:"]
+        for idx, f in enumerate(files, 1):
+            lines.append(f"{idx}. [{f['name']}] (ID: {f['id']})")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error searching Google Drive: {e}")
+        return f"Error searching Google Drive: {str(e)}"
+
+
+@server.tool()
+def import_google_drive_document(
+    file_id: str,
+    user_email: str = "demo@docmind.ai",
+) -> str:
+    """
+    Import and index a document from Google Drive directly into DocMind AI's vector store.
+    """
+    try:
+        from app.core.gdrive_mcp import download_drive_file
+        from app.core.loader import load_document
+        from app.core.chunker import chunk_text
+        import uuid
+
+        upload_dir = PROJECT_ROOT / "app" / "data" / "uploads"
+        dest_path, original_filename = download_drive_file(file_id, upload_dir)
+
+        records = load_document(str(dest_path))
+        doc_id = uuid.uuid4().hex
+        for r in records:
+            m = r.get("metadata", {})
+            m["document_id"] = doc_id
+            m["source"] = original_filename
+            m["user_email"] = user_email
+            r["metadata"] = m
+
+        chunks = chunk_text(records)
+        for c in chunks:
+            cm = c.get("metadata", {})
+            cm["user_email"] = user_email
+            c["metadata"] = cm
+
+        rag.ingest(chunks, user_email=user_email)
+        return f"Successfully imported '{original_filename}' (ID: {file_id}) into DocMind AI. Document ID: {doc_id}."
+    except Exception as e:
+        logger.error(f"Error importing Google Drive document: {e}")
+        return f"Error importing document: {str(e)}"
+
+
 if __name__ == "__main__":
     server.run()

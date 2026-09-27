@@ -1,5 +1,8 @@
 # Environment / secrets
 .env
+credentials/
+*.token.json
+token.json
 
 # Python
 venv/

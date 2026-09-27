@@ -7,17 +7,20 @@ logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICA
 from typing import List, Dict, Any
 import chromadb
 from chromadb.config import Settings
+from pathlib import Path
 from rank_bm25 import BM25Okapi
 
 from app.core.embedder import Embedder
 
 logger = logging.getLogger("docmind.vectorstore")
 
+DEFAULT_PERSIST_DIR = str(Path(__file__).resolve().parent.parent / "data" / "vectorstore")
+
 
 class VectorStore:
     def __init__(
         self,
-        persist_dir: str = "app/data/vectorstore",
+        persist_dir: str = DEFAULT_PERSIST_DIR,
         collection_name: str = "documents",
     ):
         self.client = chromadb.PersistentClient(

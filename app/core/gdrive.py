@@ -105,12 +105,26 @@ def download_google_drive_file(url: str, output_dir: Path) -> Tuple[Path, str]:
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Attempt authenticated download via Google Drive OAuth/MCP if authenticated
+    # This allows seamless downloading of private files from the user's connected Google Drive!
+    try:
+        from app.core.gdrive_mcp import is_authenticated, download_drive_file as download_drive_mcp
+        if is_authenticated():
+            try:
+                logger.info(f"Attempting download via authenticated Google Drive OAuth API for file ID: {file_id}")
+                return download_drive_mcp(file_id, output_dir)
+            except Exception as oauth_err:
+                logger.warning(f"OAuth Drive download attempt failed ({oauth_err}), falling back to public link...")
+    except ImportError:
+        pass
+
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     })
 
-    # 1. Google Workspace Documents (Docs, Sheets, Slides) -> Export formatted files
+    # 2. Google Workspace Documents (Docs, Sheets, Slides) -> Export formatted files
     if doc_type == "document":
         download_url = f"https://docs.google.com/document/d/{file_id}/export?format=pdf"
         default_filename = f"google_doc_{file_id[:8]}.pdf"
@@ -127,14 +141,14 @@ def download_google_drive_file(url: str, output_dir: Path) -> Tuple[Path, str]:
     logger.info(f"Connecting to Google Drive URL: {download_url}")
     res = session.get(download_url, stream=True, timeout=30)
 
-    # 2. Check for virus warning confirmation token for large shared files (>10MB)
+    # 3. Check for virus warning confirmation token for large shared files (>10MB)
     token = _get_confirm_token(res)
     if token:
         confirm_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
         logger.info(f"Following Google Drive large file confirmation: {confirm_url}")
         res = session.get(confirm_url, stream=True, timeout=60)
 
-    # 3. Check HTTP status
+    # 4. Check HTTP status
     if res.status_code == 404:
         raise ValueError("Google Drive file not found. Please verify the link is correct.")
     if res.status_code in [401, 403]:
@@ -149,8 +163,8 @@ def download_google_drive_file(url: str, output_dir: Path) -> Tuple[Path, str]:
         resp_text = getattr(res, "text", "") or ""
         if isinstance(resp_text, str) and ("ServiceLogin" in resp_text or "accounts.google.com" in resp_text):
             raise ValueError(
-                "This Google Drive file is private. Please update Google Drive sharing settings to "
-                "'Anyone with the link can view' and try again."
+                "This Google Drive file is private and not accessible with your connected Google account. "
+                "Please ensure the file is in your connected Drive or update its sharing settings to 'Anyone with the link can view'."
             )
 
     filename = _extract_filename_from_headers(res, default_filename)

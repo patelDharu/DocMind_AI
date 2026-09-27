@@ -5,7 +5,6 @@ enableCORS = false
 enableXsrfProtection = false
 maxUploadSize = 25
 maxMessageSize = 80
-maxWidgetStateSize = 80
 
 [browser]
 gatherUsageStats = false

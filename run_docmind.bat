@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 title DocMind AI Launcher
 echo ===================================================
 echo             Starting DocMind AI Platform
@@ -7,7 +7,7 @@ echo ===================================================
 cd /d "D:\docmind-ai"
 
 echo [1/2] Starting FastAPI Backend (Port 8000)...
-start "DocMind Backend" cmd /k ".\venv\Scripts\python.exe -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000"
+start "DocMind Backend" cmd /k ".\venv\Scripts\python.exe -m uvicorn app.api.main:app --host 127.0.0.1 --port 8000 --reload"
 
 timeout /t 3 /nobreak >nul
 
