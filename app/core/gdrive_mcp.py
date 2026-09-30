@@ -61,65 +61,113 @@ def is_gdrive_configured() -> bool:
     return get_client_secrets_path() is not None
 
 
-def is_authenticated() -> bool:
-    """Checks if a valid, non-expired (or refreshable) token exists."""
+def _load_token_from_env_or_file():
+    """Attempts to load google.oauth2.credentials.Credentials from environment variables or local file."""
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
-    if not TOKEN_PATH.is_file():
-        return False
+    # 1. Check GDRIVE_TOKEN_JSON environment variable (ideal for Render & cloud deployment)
+    token_json_env = os.getenv("GDRIVE_TOKEN_JSON") or os.getenv("GOOGLE_DRIVE_TOKEN")
+    if token_json_env:
+        try:
+            token_dict = json.loads(token_json_env.strip())
+            creds = Credentials.from_authorized_user_info(token_dict, SCOPES)
+            if creds:
+                if creds.expired and creds.refresh_token:
+                    try:
+                        creds.refresh(Request())
+                    except Exception as ref_err:
+                        logger.warning(f"Error refreshing token from GDRIVE_TOKEN_JSON: {ref_err}")
+                if creds.valid or creds.refresh_token:
+                    return creds
+        except Exception as e:
+            logger.warning(f"Failed to parse GDRIVE_TOKEN_JSON environment variable: {e}")
 
-    try:
-        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-        if creds and creds.valid:
-            return True
-        if creds and creds.expired and creds.refresh_token:
+    # 2. Check individual environment variables (GDRIVE_REFRESH_TOKEN, etc.)
+    refresh_token = os.getenv("GDRIVE_REFRESH_TOKEN")
+    client_id = os.getenv("GDRIVE_CLIENT_ID")
+    client_secret = os.getenv("GDRIVE_CLIENT_SECRET")
+    if refresh_token:
+        try:
+            creds = Credentials(
+                token=None,
+                refresh_token=refresh_token.strip(),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id.strip() if client_id else None,
+                client_secret=client_secret.strip() if client_secret else None,
+                scopes=SCOPES,
+            )
             creds.refresh(Request())
-            TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-            return True
-    except Exception as e:
-        logger.warning(f"Error checking token validity: {e}")
-    return False
+            if creds.valid:
+                return creds
+        except Exception as e:
+            logger.warning(f"Failed to initialize credentials from GDRIVE_REFRESH_TOKEN: {e}")
 
-
-def get_gdrive_credentials():
-    """Returns valid google.oauth2.credentials.Credentials or raises ValueError."""
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-
-    CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
-    creds = None
-
+    # 3. Check local file TOKEN_PATH
     if TOKEN_PATH.is_file():
         try:
             creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+            if creds:
+                if creds.expired and creds.refresh_token:
+                    try:
+                        creds.refresh(Request())
+                        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+                    except Exception as ref_err:
+                        logger.warning(f"Error refreshing local token.json: {ref_err}")
+                if creds.valid or creds.refresh_token:
+                    return creds
         except Exception as e:
-            logger.warning(f"Could not load token.json: {e}")
+            logger.warning(f"Could not load token from {TOKEN_PATH}: {e}")
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-                return creds
-            except Exception as e:
-                logger.warning(f"Token refresh failed: {e}")
+    return None
 
-        # Need initial authentication flow
-        secrets_path = get_client_secrets_path()
-        if not secrets_path:
-            raise FileNotFoundError(
-                f"Google OAuth credentials not found. Please place your downloaded OAuth JSON "
-                f"file in '{CREDENTIALS_DIR}\\gcp-oauth.keys.json' or set GDRIVE_OAUTH_PATH."
-            )
 
-        from google_auth_oauthlib.flow import InstalledAppFlow
+def is_authenticated() -> bool:
+    """Checks if a valid, non-expired (or refreshable) token exists via file or env var."""
+    try:
+        creds = _load_token_from_env_or_file()
+        return creds is not None and (creds.valid or bool(creds.refresh_token))
+    except Exception as e:
+        logger.warning(f"Error checking token validity: {e}")
+        return False
 
-        flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
-        creds = flow.run_local_server(port=0, prompt="consent")
-        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-        logger.info("Successfully generated new Google Drive OAuth token.")
 
+def get_gdrive_credentials():
+    """Returns valid google.oauth2.credentials.Credentials or raises descriptive error."""
+    from google.auth.transport.requests import Request
+
+    CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+    creds = _load_token_from_env_or_file()
+    if creds:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        return creds
+
+    # Need initial authentication flow (only on desktop/interactive console)
+    secrets_path = get_client_secrets_path()
+    if not secrets_path:
+        raise FileNotFoundError(
+            "Google OAuth credentials not found.\n"
+            "To connect Google Drive:\n"
+            "• Running locally: run `python connect_gdrive.py`\n"
+            "• Running on Render: set the 'GDRIVE_TOKEN_JSON' environment variable in your "
+            "Render Dashboard with the JSON contents of your local 'credentials/token.json'."
+        )
+
+    # Check if running in a headless environment without browser
+    if os.getenv("RENDER") or os.getenv("CI") or not sys.stdin.isatty():
+        raise RuntimeError(
+            "Cannot run interactive Google OAuth flow in a headless cloud environment (Render).\n"
+            "Please authenticate locally using `python connect_gdrive.py`, then set the "
+            "'GDRIVE_TOKEN_JSON' environment variable in your Render Dashboard."
+        )
+
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
+    creds = flow.run_local_server(port=0, prompt="consent")
+    TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+    logger.info("Successfully generated new Google Drive OAuth token.")
     return creds
 
 

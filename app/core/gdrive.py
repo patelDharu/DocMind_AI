@@ -119,52 +119,104 @@ def download_google_drive_file(url: str, output_dir: Path) -> Tuple[Path, str]:
     except ImportError:
         pass
 
+    # 2. Direct web download cascade for public files / shared links
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     })
 
-    # 2. Google Workspace Documents (Docs, Sheets, Slides) -> Export formatted files
+    # Prepare URL candidates based on doc_type
     if doc_type == "document":
-        download_url = f"https://docs.google.com/document/d/{file_id}/export?format=pdf"
+        candidate_urls = [f"https://docs.google.com/document/d/{file_id}/export?format=pdf"]
         default_filename = f"google_doc_{file_id[:8]}.pdf"
     elif doc_type == "spreadsheets":
-        download_url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
+        candidate_urls = [f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"]
         default_filename = f"google_sheet_{file_id[:8]}.xlsx"
     elif doc_type == "presentation":
-        download_url = f"https://docs.google.com/presentation/d/{file_id}/export?format=pdf"
+        candidate_urls = [f"https://docs.google.com/presentation/d/{file_id}/export?format=pdf"]
         default_filename = f"google_slides_{file_id[:8]}.pdf"
     else:
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        # Standard Drive File: Try modern drive.usercontent.google.com CDN first, then uc fallback
+        candidate_urls = [
+            f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t",
+            f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+            f"https://drive.google.com/uc?export=download&id={file_id}",
+        ]
         default_filename = f"drive_document_{file_id[:8]}.pdf"
 
-    logger.info(f"Connecting to Google Drive URL: {download_url}")
-    res = session.get(download_url, stream=True, timeout=30)
+    res = None
+    last_error = None
 
-    # 3. Check for virus warning confirmation token for large shared files (>10MB)
-    token = _get_confirm_token(res)
-    if token:
-        confirm_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
-        logger.info(f"Following Google Drive large file confirmation: {confirm_url}")
-        res = session.get(confirm_url, stream=True, timeout=60)
+    for download_url in candidate_urls:
+        try:
+            logger.info(f"Connecting to Google Drive download URL: {download_url}")
+            res = session.get(download_url, stream=True, timeout=30, allow_redirects=True)
 
-    # 4. Check HTTP status
-    if res.status_code == 404:
-        raise ValueError("Google Drive file not found. Please verify the link is correct.")
-    if res.status_code in [401, 403]:
+            # Check if an HTML confirmation page was returned for large files
+            content_type = res.headers.get("Content-Type", "").lower() if hasattr(res, "headers") else ""
+            if "text/html" in content_type:
+                resp_text = getattr(res, "text", "") or ""
+
+                # Check if Google returned a login redirect (Private file)
+                if "ServiceLogin" in resp_text or "accounts.google.com" in resp_text:
+                    logger.warning("Google Drive returned login page (file is private/restricted).")
+                    break
+
+                # Check for confirmation form
+                # <form id="download-form" action="https://drive.usercontent.google.com/download" method="get">
+                form_action_match = re.search(r'<form[^>]+action="([^"]+)"', resp_text)
+                form_inputs = dict(re.findall(r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', resp_text))
+
+                if form_action_match and form_inputs:
+                    action_url = form_action_match.group(1)
+                    if not action_url.startswith("http"):
+                        action_url = "https://drive.usercontent.google.com" + action_url
+                    logger.info(f"Submitting Google Drive confirmation form to {action_url} with params {list(form_inputs.keys())}")
+                    res = session.get(action_url, params=form_inputs, stream=True, timeout=60, allow_redirects=True)
+                else:
+                    # Token-based confirmation fallback
+                    token = _get_confirm_token(res)
+                    if token:
+                        confirm_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={token}&uuid="
+                        res = session.get(confirm_url, stream=True, timeout=60, allow_redirects=True)
+
+            if res.ok and "text/html" not in res.headers.get("Content-Type", "").lower():
+                break
+        except Exception as conn_err:
+            logger.warning(f"Error querying {download_url}: {conn_err}")
+            last_error = conn_err
+
+    # 3. Check HTTP status and diagnose permission issues
+    if res is None or not res.ok:
+        status_code = res.status_code if res else "No response"
+        if status_code == 404:
+            raise ValueError("Google Drive file not found. Please verify the URL is correct.")
+
         raise ValueError(
-            "Access denied to Google Drive file. Please ensure the link sharing is set to 'Anyone with the link can view'."
+            "Access denied to Google Drive file. Please ensure the link sharing is set to 'Anyone with the link can view'.\n\n"
+            "If deploying on Render:\n"
+            "• Option A: Right-click the file in Google Drive -> Share -> Change 'General access' to 'Anyone with the link can view' (Viewer).\n"
+            "• Option B (Recommended): Connect your Google account on Render by adding the 'GDRIVE_TOKEN_JSON' environment variable "
+            "in your Render Dashboard with the contents of your local 'credentials/token.json'."
         )
-    if not res.ok:
-        raise ValueError(f"Failed to download Google Drive document (HTTP {res.status_code}).")
 
     content_type = res.headers.get("Content-Type", "").lower() if hasattr(res, "headers") else ""
     if "text/html" in content_type and doc_type == "file":
         resp_text = getattr(res, "text", "") or ""
-        if isinstance(resp_text, str) and ("ServiceLogin" in resp_text or "accounts.google.com" in resp_text):
+        if "ServiceLogin" in resp_text or "accounts.google.com" in resp_text:
             raise ValueError(
-                "This Google Drive file is private and not accessible with your connected Google account. "
-                "Please ensure the file is in your connected Drive or update its sharing settings to 'Anyone with the link can view'."
+                "Access denied to Google Drive file. This file is private and restricted.\n\n"
+                "To access this file on Render:\n"
+                "1. In Google Drive, click Share -> Change 'General access' to 'Anyone with the link can view' (Viewer).\n"
+                "2. OR connect Google Drive on Render: In Render Dashboard > Environment, add the variable 'GDRIVE_TOKEN_JSON' "
+                "with the JSON from your local 'credentials/token.json'. This enables direct Google Drive API access for private files."
             )
 
     filename = _extract_filename_from_headers(res, default_filename)
