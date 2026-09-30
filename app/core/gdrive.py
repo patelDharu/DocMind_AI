@@ -119,7 +119,35 @@ def download_google_drive_file(url: str, output_dir: Path) -> Tuple[Path, str]:
     except ImportError:
         pass
 
-    # 2. Direct web download cascade for public files / shared links
+    # 2. Try gdown for public / shared links (handles warning screens, cookies, and tokens automatically)
+    if doc_type == "file":
+        try:
+            import gdown
+            clean_url = f"https://drive.google.com/uc?id={file_id}"
+            temp_target = output_dir / f"gdown_{file_id}"
+            out = gdown.download(clean_url, str(temp_target), quiet=True, fuzzy=True)
+            if out and Path(out).exists() and Path(out).stat().st_size > 0:
+                final_path = Path(out)
+                file_size = final_path.stat().st_size
+                if file_size <= MAX_DRIVE_DOWNLOAD_BYTES:
+                    # Check if gdown accidentally downloaded HTML login page
+                    try:
+                        with open(final_path, "rb") as test_f:
+                            header = test_f.read(1024)
+                            if b"ServiceLogin" not in header and b"accounts.google.com" not in header:
+                                logger.info(f"Successfully downloaded file via gdown: {final_path.name} ({file_size} bytes)")
+                                return final_path, final_path.name
+                    except Exception:
+                        pass
+                if final_path.exists():
+                    try:
+                        final_path.unlink()
+                    except Exception:
+                        pass
+        except Exception as gdown_err:
+            logger.warning(f"gdown attempt skipped ({gdown_err}), proceeding with direct stream...")
+
+    # 3. Direct web download cascade for public files / shared links
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

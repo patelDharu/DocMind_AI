@@ -37,7 +37,6 @@ MIME_EXPORTS = {
     "application/vnd.google-apps.presentation": ("application/pdf", ".pdf"),
 }
 
-
 def get_client_secrets_path() -> Optional[Path]:
     """Finds the Google Cloud OAuth client secrets JSON file."""
     custom_path = os.getenv("GDRIVE_OAUTH_PATH")

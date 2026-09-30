@@ -16,3 +16,5 @@ services:
         value: 10000
       - key: DATABASE_URL
         sync: false
+      - key: GDRIVE_TOKEN_JSON
+        sync: false
