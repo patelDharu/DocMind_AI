@@ -33,6 +33,7 @@ from app.core.speech import transcribe_audio
 from app.core.tts import synthesize_speech
 from app.core.resilience import GeminiServiceError
 from app.core.gdrive import download_google_drive_file
+from app.core.storage import get_storage
 from app.core.auth import (
     authenticate_user,
     register_user,
@@ -63,6 +64,7 @@ app.add_middleware(
 pipeline = RAGPipeline()
 intelligence = DocumentIntelligence()
 editor = DocumentEditor()
+storage_backend = get_storage()
 
 # =========================================================
 # AUTHENTICATION & SECURITY DEPENDENCY
@@ -323,6 +325,14 @@ def upload_document(
                     )
                 f.write(chunk)
 
+        # Store in 3rd-party object storage (S3) or local fallback
+        storage_meta = storage_backend.upload_file(
+            file_data=str(dest),
+            filename=original_filename,
+            user_email=user_email,
+            document_id=document_id,
+        )
+
         records = load_document(str(dest))
         if not records:
             records = [{
@@ -332,6 +342,8 @@ def upload_document(
                     "page": 1,
                     "char_count": len(original_filename),
                     "user_email": user_email,
+                    "storage_key": storage_meta.get("storage_key"),
+                    "storage_backend": storage_meta.get("backend"),
                 }
             }]
 
@@ -340,6 +352,8 @@ def upload_document(
             metadata["document_id"] = document_id
             metadata["source"] = original_filename
             metadata["user_email"] = user_email
+            metadata["storage_key"] = storage_meta.get("storage_key")
+            metadata["storage_backend"] = storage_meta.get("backend")
             record["metadata"] = metadata
 
         chunks = chunk_text(records)
@@ -353,12 +367,16 @@ def upload_document(
                     "page": 1,
                     "chunk": 0,
                     "user_email": user_email,
+                    "storage_key": storage_meta.get("storage_key"),
+                    "storage_backend": storage_meta.get("backend"),
                 }
             }]
         else:
             for c in chunks:
                 c_meta = c.get("metadata", {})
                 c_meta["user_email"] = user_email
+                c_meta["storage_key"] = storage_meta.get("storage_key")
+                c_meta["storage_backend"] = storage_meta.get("backend")
                 c["metadata"] = c_meta
 
         pipeline.ingest(chunks, user_email=user_email)
@@ -396,6 +414,11 @@ def upload_document(
         "filename": original_filename,
         "document_id": document_id,
         "chunks_indexed": len(chunks),
+        "storage": {
+            "backend": storage_meta.get("backend"),
+            "storage_key": storage_meta.get("storage_key"),
+            "url": storage_meta.get("url"),
+        },
         "action_alert": action_alert,
     }
 
@@ -433,6 +456,13 @@ def upload_from_google_drive(
 
     try:
         gc.collect()
+        storage_meta = storage_backend.upload_file(
+            file_data=str(dest_path),
+            filename=original_filename,
+            user_email=user_email,
+            document_id=document_id,
+        )
+
         records = load_document(str(dest_path))
         if not records:
             records = [{
@@ -443,6 +473,8 @@ def upload_from_google_drive(
                     "char_count": len(original_filename),
                     "user_email": user_email,
                     "drive_url": drive_url,
+                    "storage_key": storage_meta.get("storage_key"),
+                    "storage_backend": storage_meta.get("backend"),
                 }
             }]
 
@@ -452,6 +484,8 @@ def upload_from_google_drive(
             metadata["source"] = original_filename
             metadata["user_email"] = user_email
             metadata["drive_url"] = drive_url
+            metadata["storage_key"] = storage_meta.get("storage_key")
+            metadata["storage_backend"] = storage_meta.get("backend")
             record["metadata"] = metadata
 
         chunks = chunk_text(records)
@@ -466,6 +500,8 @@ def upload_from_google_drive(
                     "chunk": 0,
                     "user_email": user_email,
                     "drive_url": drive_url,
+                    "storage_key": storage_meta.get("storage_key"),
+                    "storage_backend": storage_meta.get("backend"),
                 }
             }]
         else:
@@ -473,6 +509,8 @@ def upload_from_google_drive(
                 c_meta = c.get("metadata", {})
                 c_meta["user_email"] = user_email
                 c_meta["drive_url"] = drive_url
+                c_meta["storage_key"] = storage_meta.get("storage_key")
+                c_meta["storage_backend"] = storage_meta.get("backend")
                 c["metadata"] = c_meta
 
         pipeline.ingest(chunks, user_email=user_email)
@@ -502,6 +540,11 @@ def upload_from_google_drive(
         "filename": original_filename,
         "document_id": document_id,
         "chunks_indexed": len(chunks),
+        "storage": {
+            "backend": storage_meta.get("backend"),
+            "storage_key": storage_meta.get("storage_key"),
+            "url": storage_meta.get("url"),
+        },
         "action_alert": action_alert,
         "source": "google_drive",
         "drive_url": drive_url,
@@ -838,6 +881,9 @@ def delete_document_api(
 
     if not deleted:
         raise HTTPException(status_code=404, detail="Document not found or you do not have permission to delete it.")
+
+    # Delete from 3rd-party / S3 storage backend
+    storage_backend.delete_document_files(document_id, user_email=user_email)
 
     for file_path in UPLOAD_DIR.glob(f"{document_id}_*"):
         try:

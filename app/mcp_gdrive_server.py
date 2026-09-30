@@ -32,6 +32,8 @@ from app.core.loader import load_document
 from app.core.chunker import chunk_text
 from app.core.vectorstore import VectorStore
 from app.core.rag import RAGPipeline
+from app.core.storage import get_storage
+
 
 server = MCPServer(
     name="Google-Drive-DocMind",
@@ -101,6 +103,17 @@ def import_drive_file_to_rag(
         upload_dir = PROJECT_ROOT / "app" / "data" / "uploads"
         dest_path, original_filename = download_drive_file(file_id, upload_dir)
 
+        import uuid
+        doc_id = uuid.uuid4().hex
+
+        storage = get_storage()
+        storage_meta = storage.upload_file(
+            file_data=str(dest_path),
+            filename=original_filename,
+            user_email=user_email,
+            document_id=doc_id,
+        )
+
         # Process document
         records = load_document(str(dest_path))
         if not records:
@@ -111,17 +124,19 @@ def import_drive_file_to_rag(
                     "page": 1,
                     "user_email": user_email,
                     "gdrive_file_id": file_id,
+                    "storage_key": storage_meta.get("storage_key"),
+                    "storage_backend": storage_meta.get("backend"),
                 }
             }]
 
-        import uuid
-        doc_id = uuid.uuid4().hex
         for r in records:
             m = r.get("metadata", {})
             m["document_id"] = doc_id
             m["source"] = original_filename
             m["user_email"] = user_email
             m["gdrive_file_id"] = file_id
+            m["storage_key"] = storage_meta.get("storage_key")
+            m["storage_backend"] = storage_meta.get("backend")
             r["metadata"] = m
 
         chunks = chunk_text(records)
@@ -129,6 +144,8 @@ def import_drive_file_to_rag(
             cm = c.get("metadata", {})
             cm["user_email"] = user_email
             cm["gdrive_file_id"] = file_id
+            cm["storage_key"] = storage_meta.get("storage_key")
+            cm["storage_backend"] = storage_meta.get("backend")
             c["metadata"] = cm
 
         pipeline.ingest(chunks, user_email=user_email)

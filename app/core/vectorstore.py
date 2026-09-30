@@ -97,14 +97,8 @@ class VectorStore:
         import gc
         clean_email = user_email.strip().lower() if user_email else "demo@docmind.ai"
 
-        # 1. BM25 indexing: budget up to 400 chunks per document to stay strictly within 512 MB RAM
-        MAX_BM25_PER_DOC = 400
-        bm25_candidate_chunks = chunks
-        if len(chunks) > MAX_BM25_PER_DOC:
-            step = max(1, len(chunks) // MAX_BM25_PER_DOC)
-            bm25_candidate_chunks = chunks[::step][:MAX_BM25_PER_DOC]
-
-        for chunk in bm25_candidate_chunks:
+        # 1. BM25 indexing: index all chunks for keyword search
+        for chunk in chunks:
             meta = chunk.get("metadata", {})
             doc_id = str(meta.get("document_id", meta.get("source", "unknown")))
             meta["user_email"] = clean_email
@@ -120,20 +114,11 @@ class VectorStore:
 
         self._rebuild_bm25()
 
-        # 2. Vector indexing with smart chunk budgeting:
-        # 30 chunks matches embed_passages batch_size perfectly (1 single API call in ~2s)
-        MAX_VECTOR_CHUNKS = 30
-        if len(chunks) > MAX_VECTOR_CHUNKS:
-            primary_chunks = chunks[:22]
-            remaining_chunks = chunks[22:]
-            step = max(1, len(remaining_chunks) // 8)
-            sampled_remaining = remaining_chunks[::step][:8]
-            vector_chunks = primary_chunks + sampled_remaining
-        else:
-            vector_chunks = chunks
+        # 2. Vector indexing: index ALL chunks into dense vector index (no artificial sampling / truncation)
+        vector_chunks = chunks
 
         texts = [chunk["text"] for chunk in vector_chunks]
-        embeddings = self.embedder.embed_passages(texts)
+        embeddings = self.embedder.embed_passages(texts, batch_size=30)
         ids = [chunk["id"] for chunk in vector_chunks]
 
         metadatas = []
@@ -165,26 +150,32 @@ class VectorStore:
             return
 
         try:
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=texts,
-                metadatas=metadatas,
-            )
-        except Exception as e:
-            # Handle collection dimension mismatch when embedding model changes
-            if "dimensionality" in str(e).lower() or "dimension" in str(e).lower():
-                self.client.delete_collection(self.collection_name)
-                self.collection = self.client.get_or_create_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": "cosine"},
-                )
+            # Batch insertion into Chroma to keep memory usage low and prevent oversized payloads
+            CHROMA_BATCH_SIZE = 100
+            for start_idx in range(0, len(ids), CHROMA_BATCH_SIZE):
+                end_idx = start_idx + CHROMA_BATCH_SIZE
                 self.collection.add(
-                    ids=ids,
-                    embeddings=embeddings,
-                    documents=texts,
-                    metadatas=metadatas,
+                    ids=ids[start_idx:end_idx],
+                    embeddings=embeddings[start_idx:end_idx],
+                    documents=texts[start_idx:end_idx],
+                    metadatas=metadatas[start_idx:end_idx],
                 )
+        except Exception as e:
+            err_msg = str(e).lower()
+            # Handle collection dimension mismatch safely without deleting multi-tenant data
+            if "dimensionality" in err_msg or "dimension" in err_msg:
+                incoming_dim = len(embeddings[0]) if embeddings else "unknown"
+                logger.error(
+                    f"CRITICAL: ChromaDB dimension mismatch error while adding chunks to collection '{self.collection_name}'. "
+                    f"New embeddings have dimension {incoming_dim}, but existing collection schema has a different dimension. "
+                    f"Collection was NOT deleted to preserve multi-tenant documents! Original error: {e}"
+                )
+                raise ValueError(
+                    f"Embedding dimension mismatch: The active embedding model produced {incoming_dim}-dimensional vectors, "
+                    f"which does not match existing ChromaDB collection '{self.collection_name}'. "
+                    f"Multi-tenant document data was safely preserved. Please restore the original GEMINI_EMBEDDING_MODEL "
+                    f"or execute an administrative re-indexing migration."
+                ) from e
             else:
                 raise e
         finally:

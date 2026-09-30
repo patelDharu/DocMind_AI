@@ -3,7 +3,7 @@
 import os
 import re
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 import pdfplumber
@@ -188,7 +188,73 @@ class DocumentLoader:
             return []
 
     @staticmethod
+    def _is_garbled_or_insufficient(docs: List[Dict[str, Any]], total_pages: int = 1) -> Tuple[bool, str]:
+        """
+        Evaluate whether extracted digital PDF text is garbled, corrupted by broken
+        font encodings (e.g. missing ToUnicode CMaps, CID codes), or insufficient (e.g.
+        image-only pages where only a tiny header was extracted).
+        """
+        if not docs:
+            return True, "No text extracted from PDF"
+
+        full_text = " ".join(d.get("text", "") for d in docs).strip()
+        total_chars = len(full_text)
+
+        # 1. Total character count threshold (< 50 chars)
+        if total_chars < 50:
+            return True, f"Extremely low character count ({total_chars} chars < 50)"
+
+        # 2. Average characters per page for multi-page documents
+        # Catches scanned PDFs where each page only has a 20-30 character digital header/footer
+        if total_pages > 1 and (total_chars / total_pages) < 40:
+            return True, f"Sparse page content ({total_chars / total_pages:.1f} chars/page across {total_pages} pages)"
+
+        # 3. Font encoding CID corruption: (cid:123) sequences from missing /ToUnicode CMaps
+        cid_matches = len(re.findall(r"\(cid:\d+\)", full_text, flags=re.IGNORECASE))
+        if cid_matches > 5 or (cid_matches / max(1, len(full_text.split()))) > 0.08:
+            return True, f"Broken font encoding detected ({cid_matches} CID artifacts)"
+
+        # 4. Replacement characters: \ufffd (Unicode replacement character)
+        replacement_count = full_text.count("\ufffd")
+        if replacement_count > 5 and (replacement_count / total_chars) > 0.03:
+            return True, f"High Unicode replacement character density ({replacement_count} replacement chars)"
+
+        # 5. Non-printable or control characters flood (excluding standard whitespace \n, \r, \t)
+        control_chars = sum(1 for c in full_text if ord(c) < 32 and c not in "\n\r\t")
+        if control_chars > 5 and (control_chars / total_chars) > 0.03:
+            return True, f"Control/binary artifacts in text ({control_chars} control characters)"
+
+        # 6. Alphanumeric & readable punctuation ratio (supports English, Hindi, Gujarati, numbers, punctuation)
+        readable_count = sum(
+            1 for c in full_text
+            if c.isalnum()
+            or c.isspace()
+            or c in ".,!?:;\"'()[]{}/*-+=%&$#@_<>|–—₹$€£¥\u0964\u0965"
+            or ('\u0900' <= c <= '\u097F')
+            or ('\u0A80' <= c <= '\u0AFF')
+        )
+        readable_ratio = readable_count / max(1, total_chars)
+        if readable_ratio < 0.60:
+            return True, f"Low readable text ratio ({readable_ratio:.1%} readable characters)"
+
+        # 7. Word structure check: broken token streams or gibberish
+        words = re.findall(r"[\w\u0900-\u097F\u0A80-\u0AFF]+", full_text)
+        if len(words) < 8:
+            return True, f"Fewer than 8 recognizable words extracted ({len(words)} words)"
+
+        avg_word_len = sum(len(w) for w in words) / max(1, len(words))
+        if avg_word_len > 28:
+            return True, f"Abnormally high average word length ({avg_word_len:.1f} chars/word, possible unspaced corruption)"
+
+        single_char_words = sum(1 for w in words if len(w) == 1)
+        if len(words) > 15 and (single_char_words / len(words)) > 0.70:
+            return True, f"Isolated single characters without words ({single_char_words}/{len(words)} single characters)"
+
+        return False, "Text quality OK"
+
+    @staticmethod
     def _load_pdf(file_path: str) -> List[Dict[str, Any]]:
+
         docs = []
         filename = os.path.basename(file_path)
         file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
@@ -286,13 +352,24 @@ class DocumentLoader:
                 logger.warning(f"pdfplumber failed on {filename}: {e}")
 
         total_chars = sum(len(d["text"]) for d in docs)
+        is_garbled, reason = DocumentLoader._is_garbled_or_insufficient(docs, total_pages=total_pages)
 
-        # Fallback to Gemini Vision OCR for scanned or image-based PDFs (<50 characters)
-        if total_chars < 50:
-            logger.info(f"PDF {filename} appears to be scanned/image-based (<50 chars). Triggering Gemini OCR...")
+        # Fallback to Gemini Vision OCR for scanned, image-based, or garbled/broken font PDFs
+        if is_garbled:
+            logger.info(
+                f"PDF '{filename}' digital text check triggered OCR fallback ({reason}). "
+                f"Triggering Gemini Vision OCR..."
+            )
             ocr_docs = DocumentLoader._ocr_with_gemini(file_path, mime_type="application/pdf")
             if ocr_docs:
-                docs = ocr_docs
+                ocr_garbled, ocr_reason = DocumentLoader._is_garbled_or_insufficient(ocr_docs, total_pages=total_pages)
+                if not ocr_garbled or not docs:
+                    docs = ocr_docs
+                    logger.info(f"Gemini OCR successfully extracted {len(docs)} pages for '{filename}'.")
+                else:
+                    logger.warning(
+                        f"Gemini OCR also flagged ({ocr_reason}); retaining initial extraction for '{filename}'."
+                    )
 
         return docs
 
